@@ -9,16 +9,20 @@ export async function proxy(request: NextRequest) {
   const url = request.nextUrl;
   const host = request.headers.get("host")?.toLowerCase() || "";
   
-  // Limpiamos el ROOT_DOMAIN de cualquier espacio o protocolo
-  const rootDomain = process.env.NEXT_PUBLIC_ROOT_DOMAIN?.replace("https://", "").replace("http://", "").toLowerCase();
+  // Limpiamos la variable por si tiene espacios o https
+  const rootDomain = process.env.NEXT_PUBLIC_ROOT_DOMAIN?.replace("https://", "").replace("http://", "").trim().toLowerCase();
 
-  // 1. IMPORTANTE: Si es el dominio de Vercel o el Root Domain, NO HACEMOS REWRITE.
-  // Esto permite que tu landing principal y login carguen normal.
+  // --- LOGS DE CONTROL (Miralos en la pestaña Logs de Vercel) ---
+  console.log("LOG_HOST:", host);
+  console.log("LOG_ROOT:", rootDomain);
+
+  // 1. SI ES EL DOMINIO PRINCIPAL (O de Vercel/Localhost): NO HACEMOS REWRITE
+  // Agregamos .vercel.app para que tu landing siempre cargue en la URL de prueba
   if (host === rootDomain || host.includes("vercel.app") || host.startsWith("localhost")) {
     return response;
   }
 
-  // 2. Configuración de Supabase (se queda igual)
+  // 2. CONFIGURACIÓN SUPABASE (Igual que antes)
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
@@ -36,16 +40,15 @@ export async function proxy(request: NextRequest) {
 
   await supabase.auth.getUser()
 
-  // 3. Excepciones de archivos estáticos y API
+  // 3. EXCEPCIONES
   if (url.pathname.startsWith("/_next") || url.pathname.startsWith("/api") || url.pathname.startsWith("/static")) {
     return response;
   }
 
-  // 4. Lógica para subdominios/clientes (aquí es donde sucede la "magia")
+  // 4. REWRITE PARA CLIENTES (EJ: constructoras)
   const searchParams = url.searchParams.toString();
   const path = `${url.pathname}${searchParams.length > 0 ? `?${searchParams}` : ""}`;
 
-  // Esto busca la carpeta [slug] en tu proyecto
   return NextResponse.rewrite(
     new URL(`/${host}${path}`, request.url)
   );
