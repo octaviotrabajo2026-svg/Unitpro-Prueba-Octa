@@ -2,35 +2,16 @@ import { createServerClient } from '@supabase/ssr'
 import { NextResponse, type NextRequest } from 'next/server'
 
 export async function proxy(request: NextRequest) {
+  // 1. Iniciamos la respuesta limpia (Esto soluciona el 404 Edge de Vercel)
+  let response = NextResponse.next();
+
   const url = request.nextUrl;
   const host = request.headers.get("host")?.toLowerCase() || "";
+  
+  // Limpiamos la variable por si tiene espacios o protocolos
   const rootDomain = process.env.NEXT_PUBLIC_ROOT_DOMAIN?.replace("https://", "").replace("http://", "").trim().toLowerCase();
 
-  // 1. DETERMINE THE ROUTE DESTINATION FIRST
-  let isRewrite = false;
-  const searchParams = url.searchParams.toString();
-  const path = `${url.pathname}${searchParams.length > 0 ? `?${searchParams}` : ""}`;
-  const rewriteUrl = `/${host}${path}`;
-
-  // If it's NOT the root domain, NOT vercel, NOT localhost, AND NOT an internal Next.js file -> it's a subtenant rewrite
-  if (
-    host !== rootDomain && 
-    !host.includes("vercel.app") && 
-    !host.startsWith("localhost") &&
-    !url.pathname.startsWith("/_next") && 
-    !url.pathname.startsWith("/api") && 
-    !url.pathname.startsWith("/static")
-  ) {
-    isRewrite = true;
-  }
-
-  // 2. INITIALIZE THE RESPONSE SAFELY
-  // CRITICAL FIX: Passing { request } is mandatory so Vercel doesn't lose routing context.
-  let response = isRewrite
-    ? NextResponse.rewrite(new URL(rewriteUrl, request.url))
-    : NextResponse.next({ request });
-
-  // 3. INJECT SUPABASE
+  // 2. CONFIGURACIÓN SUPABASE
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
@@ -38,27 +19,33 @@ export async function proxy(request: NextRequest) {
       cookies: {
         getAll() { return request.cookies.getAll() },
         setAll(cookiesToSet) {
-          // Update the request cookies
           cookiesToSet.forEach(({ name, value }) => request.cookies.set(name, value))
-          
-          // CRITICAL FIX: Recreate the specific response type, passing the request again
-          response = isRewrite
-            ? NextResponse.rewrite(new URL(rewriteUrl, request.url))
-            : NextResponse.next({ request })
-          
-          // Apply the cookies to the new response
-          cookiesToSet.forEach(({ name, value, options }) =>
-            response.cookies.set(name, value, options)
-          )
+          response = NextResponse.next()
+          cookiesToSet.forEach(({ name, value, options }) => response.cookies.set(name, value, options))
         },
       },
     }
   )
 
-  // Trigger Supabase to check/refresh the session (this might invoke setAll above)
   await supabase.auth.getUser()
 
-  return response;
+  // 3. EXCEPCIONES PARA RECURSOS INTERNOS
+  if (url.pathname.startsWith("/_next") || url.pathname.startsWith("/api") || url.pathname.startsWith("/static")) {
+    return response;
+  }
+
+  // 4. SI ES TU DOMINIO PRINCIPAL (O el link de Vercel)
+  if (host === rootDomain || host.includes("vercel.app") || host.startsWith("localhost")) {
+    return response;
+  }
+
+  // 5. SI ES UN SUBDOMINIO CLIENTE: REESCRIBIMOS LA RUTA
+  const searchParams = url.searchParams.toString();
+  const path = `${url.pathname}${searchParams.length > 0 ? `?${searchParams}` : ""}`;
+
+  return NextResponse.rewrite(
+    new URL(`/${host}${path}`, request.url)
+  );
 }
 
 export const config = {
