@@ -1,0 +1,31 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cd \"C:/Documentos/Claude Code Prueba\" && npm audit --audit-level=moderate 2>&1 | head -802)",
+      "Bash(find \"C:/Documentos/Claude Code Prueba/app\" -name \"*.tsx\" -o -name \"*.ts\" | xargs grep -l \"auth\\\\|autenticaci\" | grep -v \"node_modules\" | head -20)",
+      "Bash(cd \"C:\\\\Documentos\\\\Claude Code Prueba\" && npx tsc --noEmit 2>&1)",
+      "Bash(cd \"C:\\\\Documentos\\\\Claude Code Prueba\" && npm install 2>&1 | tail -5)",
+      "Bash(cd \"C:\\\\Documentos\\\\Claude Code Prueba\" && npx tsc --noEmit --project tsconfig.json 2>&1 | grep -v \"^\\\\.next/\" | grep -v \"ui-ux-pro-max-skill\")",
+      "Bash(cd \"C:\\\\Documentos\\\\Claude Code Prueba\" && npx tsc --noEmit 2>&1 | grep -v \"^\\\\.next/\" | grep -v \"ui-ux-pro-max-skill/\" | grep -v \"^$\")",
+      "Bash(cd \"C:\\\\Documentos\\\\Claude Code Prueba\" && npx next lint 2>&1)",
+      "Bash(cd \"C:\\\\Documentos\\\\Claude Code Prueba\" && npx eslint app/ components/ lib/ --ext .ts,.tsx 2>&1 | head -60)",
+      "Bash(cd \"C:\\\\Documentos\\\\Claude Code Prueba\" && npx eslint app/ components/ lib/ --ext .ts,.tsx 2>&1 | tail -80)",
+      "Bash(cd \"C:\\\\Documentos\\\\Claude Code Prueba\" && npx eslint app/admin/page.tsx app/actions/admin/agency-actions.ts app/actions/admin/change-password.ts app/actions/confirm-booking/manage-appointment.ts app/actions/service-booking/manage-appointment.ts app/actions/service-booking/block-time.ts components/ui/SafeHTML.tsx components/ui/DynamicFont.tsx app/api/superadmin/auth/route.ts app/api/google/create-event/route.ts app/api/google/send-email/route.ts \"app/api/Whatsapp/generar-qr/route.ts\" app/api/cron/cleanup-images/route.ts 2>&1)",
+      "Bash(npm i:*)",
+      "Bash(sleep:*)",
+      "Bash(npx vercel:*)",
+      "Bash(vercel:*)",
+      "Bash(cd:*)",
+      "Bash(find:*)",
+      "Bash(grep:*)",
+      "mcp__ide__getDiagnostics",
+      "Bash(npx tsc:*)",
+      "Bash(npm run:*)",
+      "Bash(npm install:*)"
+    ]
+  },
+  "enabledPlugins": {
+    "fullstack-dev-skills@fullstack-dev-skills": true,
+    "everything-claude-code@everything-claude-code": true
+  }
+}
