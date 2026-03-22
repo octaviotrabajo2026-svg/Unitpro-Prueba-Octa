@@ -27,7 +27,7 @@ export async function middleware(request: NextRequest) {
     }
   )
 
-  await supabase.auth.getUser()
+  try { await supabase.auth.getUser() } catch {}
 
   // 3. EXCEPCIONES PARA RECURSOS INTERNOS
   if (url.pathname.startsWith("/_next") || url.pathname.startsWith("/api") || url.pathname.startsWith("/static")) {
