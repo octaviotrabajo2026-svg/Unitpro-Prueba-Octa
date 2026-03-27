@@ -11,7 +11,7 @@ import {
   Megaphone, Images, Globe, ShoppingCart, GraduationCap,
 } from "lucide-react";
 import { rescheduleBooking }  from "@/app/actions/service-booking/calendar-actions";
-import { approveAppointment } from "@/app/actions/confirm-booking/manage-appointment";
+import { approveAppointment } from "@/blocks/calendar/actions";
 import { BLOCKS_REGISTRY }   from "@/blocks/_registry";
 import ModularEditor         from "@/components/editors/ModularEditor";
 import OnboardingWizard      from "@/components/onboarding/OnboardingWizard";
@@ -131,16 +131,42 @@ export default function ModularDashboard({ initialData }: { initialData: any }) 
   }, []);
 
   useEffect(() => {
-    const channel = supabase
+  let channel: ReturnType<typeof supabase.channel> | null = null;
+
+  const setup = async () => {
+    // Obtener JWT para el WebSocket (las cookies no viajan por WS)
+    const { data: { session } } = await supabase.auth.getSession();
+    if (session?.access_token) {
+      supabase.realtime.setAuth(session.access_token);
+    }
+
+    channel = supabase
       .channel('turnos-realtime')
       .on('postgres_changes',
         { event: '*', schema: 'public', table: 'turnos', filter: `negocio_id=eq.${initialData.id}` },
         () => { fetchData(); }
       )
-      .subscribe();
+      .subscribe((status) => {
+        console.log('[REALTIME]', status);
+      });
+  };
 
-    return () => { supabase.removeChannel(channel); };
-  }, [initialData.id, fetchData]);
+  setup();
+
+  // Renovar token cuando cambia la sesión
+  const { data: { subscription: authSub } } = supabase.auth.onAuthStateChange(
+    (_event, session) => {
+      if (session?.access_token) {
+        supabase.realtime.setAuth(session.access_token);
+      }
+    }
+  );
+
+  return () => {
+    if (channel) supabase.removeChannel(channel);
+    authSub.unsubscribe();
+  };
+}, [initialData.id, fetchData]);
 
   // ── sharedData ─────────────────────────────────────────────────────────────
   const sharedData: BlockSharedData = {
@@ -175,20 +201,24 @@ export default function ModularDashboard({ initialData }: { initialData: any }) 
   // requerir que estén en tenant_blocks. Para negocios con agencia se aplica
   // el filtro habitual de activeTenantIds + block_edit_permissions.
   const tabs = Object.values(BLOCKS_REGISTRY)
-    .filter(def => {
-      if (!def.AdminComponent) return false;
-      if (def.alwaysActive)    return true;
-      if (isAutogestionado)    return true;
-      if (!activeTenantIds.includes(def.id)) return false;
-      // Bloques con agencia: respetar block_edit_permissions del negocio
+  .filter(def => {
+    if (!def.AdminComponent) return false;
+
+    // Negocios con agencia: respetar block_edit_permissions SIEMPRE
+    if (!isAutogestionado) {
       const blockPermsMap = negocio.block_edit_permissions as Record<string, boolean> | undefined;
       if (blockPermsMap && blockPermsMap[def.id] === false) return false;
-      return true;
-    })
-    .filter(def =>
-      def.sidebarVisible ? def.sidebarVisible(sharedData, negocio) : true
-    )
-    .sort((a, b) => (a.adminOrder ?? 99) - (b.adminOrder ?? 99));
+    }
+
+    if (def.alwaysActive)    return true;
+    if (isAutogestionado)    return true;
+    if (!activeTenantIds.includes(def.id)) return false;
+    return true;
+  })
+  .filter(def =>
+    def.sidebarVisible ? def.sidebarVisible(sharedData, negocio) : true
+  )
+  .sort((a, b) => (a.adminOrder ?? 99) - (b.adminOrder ?? 99));
 
   // ── Acciones globales ──────────────────────────────────────────────────────
   const handleLogout = async () => {
@@ -386,13 +416,29 @@ export default function ModularDashboard({ initialData }: { initialData: any }) 
       {/* ── Contenido ────────────────────────────────────────────────────── */}
       <main className="flex-1 overflow-y-auto h-screen">
         <div className="max-w-6xl mx-auto p-6 lg:p-10">
-          {ActiveAdmin ? (
-            <ActiveAdmin
-              negocio={negocio}
-              config={activeConfig}
-              sharedData={sharedData}
-            />
-          ) : (
+          {tabs.map((def) => {
+            const AdminComponent = def.AdminComponent;
+            // Si el bloque no tiene componente de admin, lo saltamos
+            if (!AdminComponent) return null;
+
+            // Renderizamos todos los componentes, pero ocultamos los que no son la tab activa
+            // Esto evita que se destruyan y se vuelvan a descargar al cambiar de tab
+            return (
+              <div
+                key={def.id}
+                className={activeTab === def.id ? "block" : "hidden"}
+              >
+                <AdminComponent
+                  negocio={negocio}
+                  config={activeConfig}
+                  sharedData={sharedData}
+                />
+              </div>
+            );
+          })}
+
+          {/* Fallback por si la tab activa no tiene componente (caso raro dado el filtro) */}
+          {!BLOCKS_REGISTRY[activeTab]?.AdminComponent && (
             <div className="p-12 text-center text-zinc-400 bg-white rounded-2xl border border-dashed border-zinc-200">
               Esta sección no tiene panel de administración aún.
             </div>

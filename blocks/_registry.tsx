@@ -16,6 +16,7 @@ import dynamic from 'next/dynamic';
 const HeroSection     = dynamic(() => import('@/blocks/landing/public/HeroSection'));
 const AboutSection    = dynamic(() => import('@/blocks/about/public/AboutSection'));
 const CalendarSection = dynamic(() => import('@/blocks/calendar/public/CalendarSection'));
+const EquipoSection = dynamic(() => import('@/blocks/equipo/public/EquipoSection'));
 const GallerySection  = dynamic(() => import('@/blocks/gallery/public/GallerySection'));
 const ReviewsSection  = dynamic(() => import('@/blocks/reviews/public/ReviewsSection'));
 const ContactSection  = dynamic(() => import('@/blocks/crm/public/ContactSection'));
@@ -27,7 +28,7 @@ const AcademySection  = dynamic(() => import('@/blocks/academy/public/AcademySec
 // dynamic() sin opciones igual resuelve el TDZ haciendo lazy loading / code splitting.
 const ResumenAdmin       = dynamic(() => import('@/blocks/platform/admin/ResumenAdmin'));
 const SolicitudesAdmin   = dynamic(() => import('@/blocks/platform/admin/SolicitudesAdmin'));
-const SuscripcionAdmin   = dynamic(() => import('@/blocks/platform/admin/SuscripcionAdmin'));
+//const SuscripcionAdmin   = dynamic(() => import('@/blocks/platform/admin/SuscripcionAdmin'));
 const ConfiguracionAdmin = dynamic(() => import('@/blocks/platform/admin/ConfiguracionAdmin'));
 const BloquesAdmin       = dynamic(() => import('@/blocks/platform/admin/BloquesAdmin'));
 const CalendarAdmin      = dynamic(() => import('@/blocks/calendar/admin/CalendarAdmin'));
@@ -37,12 +38,12 @@ const AnalyticsAdmin     = dynamic(() => import('@/blocks/analytics/admin/Analyt
 const MarketingAdmin     = dynamic(() => import('@/blocks/marketing/admin/MarketingAdmin'));
 const ShopAdmin          = dynamic(() => import('@/blocks/shop/admin/ShopAdmin'));
 const AcademyAdmin       = dynamic(() => import('@/blocks/academy/admin/AcademyAdmin'));
-const ChatbotAdmin       = dynamic(() => import('@/blocks/chatbot/admin/ChatbotAdmin'));
 
 // ── EditorPanels (ModularEditor) ──────────────────────────────────────────────
 const LandingPanel  = dynamic(() => import('@/blocks/landing/editor/LandingPanel'));
 const AboutPanel    = dynamic(() => import('@/blocks/about/editor/AboutPanel'));
 const CalendarPanel = dynamic(() => import('@/blocks/calendar/editor/CalendarPanel'));
+const EquipoPanel = dynamic(() => import('@/blocks/equipo/editor/EquipoPanel'));
 const CrmPanel      = dynamic(() => import('@/blocks/crm/editor/CrmPanel'));
 const GalleryPanel  = dynamic(() => import('@/blocks/gallery/editor/GalleryPanel'));
 const ShopPanel     = dynamic(() => import('@/blocks/shop/editor/ShopPanel'));
@@ -90,7 +91,7 @@ export const BLOCKS_REGISTRY: Record<BlockId, BlockDefinition> = {
     category: 'platform', priceARS: 0, agencyPriceARS: 0, priceUC: 0, agencyPriceUC: 0, dependencies: [],
     icon: 'CreditCard', available: true,
     alwaysActive: true, adminOrder: 9,
-    AdminComponent: SuscripcionAdmin,
+    //AdminComponent: SuscripcionAdmin,
   },
   bloques: {
     id: 'bloques', name: 'Mis Bloques', description: 'Activá funcionalidades y configurá el orden de secciones.',
@@ -137,8 +138,18 @@ export const BLOCKS_REGISTRY: Record<BlockId, BlockDefinition> = {
     sidebarBadge: (_, negocio) => !negocio.google_calendar_connected ? '!' : undefined,
     SectionComponent: CalendarSection,
     AdminComponent:   CalendarAdmin,
-    editorLabel: 'Servicios & Equipo',
+    editorLabel: 'Servicios',
     EditorPanel: CalendarPanel,
+  },
+  equipo: {
+    id: 'equipo', name: 'Equipo',
+    description: 'Sección de profesionales y equipo de trabajo.',
+    category: 'services', priceARS: 0, agencyPriceARS: 0, priceUC: 0, agencyPriceUC: 0,
+    dependencies: ['calendar'],
+    icon: 'Users', available: true, adminOrder: 99,
+    SectionComponent: EquipoSection,
+    editorLabel: 'Equipo / Profesionales',
+    EditorPanel: EquipoPanel,
   },
   crm: {
     id: 'crm', name: 'Clientes',
@@ -210,15 +221,6 @@ export const BLOCKS_REGISTRY: Record<BlockId, BlockDefinition> = {
     AdminComponent:   AcademyAdmin,
     editorLabel: 'Academia & Cursos',
     EditorPanel: AcademyPanel,
-  },
-  chatbot: {
-    id: 'chatbot', name: 'Chatbot WhatsApp',
-    description: 'Asistente de IA que atiende por WhatsApp, agenda turnos y responde consultas automáticamente.',
-    category: 'services', priceARS: 3000, agencyPriceARS: 2100, priceUC: 30, agencyPriceUC: 21,
-    dependencies: ['calendar'],
-    icon: 'Bot', available: true,
-    adminOrder: 13,
-    AdminComponent: ChatbotAdmin,
   },
 };
 // ─── Helpers del registry ─────────────────────────────────────────────────────

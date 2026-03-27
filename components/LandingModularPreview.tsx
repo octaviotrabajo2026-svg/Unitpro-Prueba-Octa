@@ -7,7 +7,7 @@
 // Escucha postMessage del editor padre y actualiza el negocio en memoria,
 // igual que ConfirmBookingLanding hace con el legacy.
 // NUNCA escribe en Supabase — eso lo hace el editor al guardar.
-
+import ContactSection from "@/blocks/crm/public/ContactSection";
 import { useEffect, useState } from "react";
 import { BLOCKS_REGISTRY } from "@/blocks/_registry";
 import type { BlockId } from "@/types/blocks";
@@ -19,19 +19,20 @@ interface Props {
   ordered:      BlockId[];
 }
 
-export default function LandingModularPreview({ negocio: initialNegocio, activeBlocks, ordered }: Props) {
-  const [negocio, setNegocio] = useState(initialNegocio);
+export default function LandingModularPreview({ negocio: initialNegocio, activeBlocks, ordered: initialOrdered }: Props) {
+  const [negocio,  setNegocio]  = useState(initialNegocio);
+  const [ordered,  setOrdered]  = useState(initialOrdered);
 
-  // Escuchar mensajes del editor
   useEffect(() => {
     const handleMessage = (event: MessageEvent) => {
       if (event.data?.type === "UPDATE_CONFIG") {
-        // El editor mandó un nuevo config_web completo
         setNegocio((prev: any) => ({ ...prev, config_web: event.data.payload }));
       }
       if (event.data?.type === "UPDATE_DB") {
-        // El editor mandó campos de DB (direccion, whatsapp, etc.)
         setNegocio((prev: any) => ({ ...prev, ...event.data.payload }));
+      }
+      if (event.data?.type === "UPDATE_ORDER") {
+        setOrdered(event.data.payload);
       }
     };
     window.addEventListener("message", handleMessage);
@@ -64,6 +65,9 @@ export default function LandingModularPreview({ negocio: initialNegocio, activeB
           />
         );
       })}
+            {!ordered.includes("crm" as BlockId) && (
+        <ContactSection negocio={negocio} config={{}} />
+      )}
     </div>
   );
 }

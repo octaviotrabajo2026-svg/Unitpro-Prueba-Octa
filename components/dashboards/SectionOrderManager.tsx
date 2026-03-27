@@ -13,13 +13,14 @@ import type { BlockId } from "@/types/blocks";
 // Lista estática para evitar importar _registry y crear una dependencia circular:
 // _registry → dynamic(BloquesAdmin) → dynamic(SectionOrderManager) → static(_registry)
 const BLOCKS_WITH_SECTION = new Set<BlockId>([
-  "landing", "about", "calendar", "crm", "reviews", "gallery", "shop", "academy",
+  "landing", "about", "calendar", "equipo", "crm", "reviews", "gallery", "shop", "academy",
 ]);
 
 const ICON_LABELS: Record<string, string> = {
   landing:   "🏠 Hero / Navbar",
   about:     "👥 Quiénes Somos",
   calendar:  "📅 Servicios & Turnos",
+  equipo:    "👤 Equipo & Profesionales",
   gallery:   "🖼️ Galería",
   reviews:   "⭐ Valoraciones",
   crm:       "📍 Contacto & Ubicación",
@@ -29,9 +30,10 @@ const ICON_LABELS: Record<string, string> = {
 
 interface SectionOrderManagerProps {
   negocioId: number;
+  onOrderChange?: (order: BlockId[]) => void;
 }
 
-export default function SectionOrderManager({ negocioId }: SectionOrderManagerProps) {
+export default function SectionOrderManager({ negocioId, onOrderChange }: SectionOrderManagerProps) {
   const supabase = createClient();
 
   const [order, setOrder]       = useState<BlockId[]>([]);
@@ -52,8 +54,11 @@ export default function SectionOrderManager({ negocioId }: SectionOrderManagerPr
 
       if (!activeBlocks?.length) { setLoading(false); return; }
 
-      const activeIds = activeBlocks.map(b => b.block_id as BlockId)
-        .filter(id => BLOCKS_WITH_SECTION.has(id))
+      let activeIds = activeBlocks.map(b => b.block_id as BlockId)
+        .filter(id => BLOCKS_WITH_SECTION.has(id));
+      if (activeIds.includes("calendar") && !activeIds.includes("equipo")) {
+        activeIds = [...activeIds, "equipo"];
+      }
 
       // 2. Orden guardado en config del bloque landing
       const landingBlock = activeBlocks.find(b => b.block_id === "landing");
@@ -86,6 +91,7 @@ export default function SectionOrderManager({ negocioId }: SectionOrderManagerPr
       const next = [...prev];
       const [moved] = next.splice(dragIdx, 1);
       next.splice(idx, 0, moved);
+      onOrderChange?.(next);
       return next;
     });
     setDragIdx(idx);
@@ -182,25 +188,6 @@ export default function SectionOrderManager({ negocioId }: SectionOrderManagerPr
           );
         })}
       </div>
-
-      {/* Botón guardar */}
-      <button
-        onClick={handleSave}
-        disabled={saving || saved}
-        className={`w-full py-2.5 rounded-xl font-bold text-sm flex items-center justify-center gap-2 transition-all ${
-          saved
-            ? "bg-green-50 text-green-700 border border-green-200"
-            : "bg-zinc-900 text-white hover:bg-zinc-700"
-        } disabled:opacity-60`}
-      >
-        {saving ? (
-          <><Loader2 size={14} className="animate-spin" /> Guardando...</>
-        ) : saved ? (
-          <><Check size={14} /> Guardado</>
-        ) : (
-          "Guardar orden"
-        )}
-      </button>
     </div>
   );
 }

@@ -51,6 +51,7 @@ export default function ModularEditor({ negocio, onClose, onSaved }: ModularEdit
   const [saving,    setSaving]    = useState(false);
   const [saved,     setSaved]     = useState(false);
   const [dirty,     setDirty]     = useState(false);
+  const [sectionOrder, setSectionOrder] = useState<BlockId[]>([]);
   const [editorMode, setEditorMode] = useState<'easy' | 'pro'>(() => {
     if (typeof window !== 'undefined') {
       return (localStorage.getItem('unitpro_editor_mode') as 'easy' | 'pro') || 'easy';
@@ -70,6 +71,7 @@ export default function ModularEditor({ negocio, onClose, onSaved }: ModularEdit
   const iframeRef   = useRef<HTMLIFrameElement>(null);
   const configRef   = useRef(config);
   const dbRef       = useRef(dbFields);
+  const panelRef = useRef<HTMLDivElement>(null);
   configRef.current = config;
   dbRef.current     = dbFields;
 
@@ -100,7 +102,14 @@ export default function ModularEditor({ negocio, onClose, onSaved }: ModularEdit
     if (!win) return;
     win.postMessage({ type: "UPDATE_CONFIG", payload: configRef.current }, "*");
     win.postMessage({ type: "UPDATE_DB",     payload: dbRef.current },     "*");
-  }, [config, dbFields]);
+    if (sectionOrder.length > 0) {
+      win.postMessage({ type: "UPDATE_ORDER", payload: sectionOrder }, "*");
+    }
+  }, [config, dbFields, sectionOrder]);
+
+  useEffect(() => {
+    panelRef.current?.scrollTo({ top: 0 });
+  }, [activeTab]);
 
   // Al cargar el iframe, mandarle el estado inicial
   const handleIframeLoad = () => {
@@ -108,6 +117,9 @@ export default function ModularEditor({ negocio, onClose, onSaved }: ModularEdit
     if (!win) return;
     win.postMessage({ type: "UPDATE_CONFIG", payload: configRef.current }, "*");
     win.postMessage({ type: "UPDATE_DB",     payload: dbRef.current },     "*");
+    if (sectionOrder.length > 0) {
+      win.postMessage({ type: "UPDATE_ORDER", payload: sectionOrder }, "*");
+    }
   };
 
   // ── Tabs del editor ───────────────────────────────────────────────────────
@@ -120,7 +132,9 @@ export default function ModularEditor({ negocio, onClose, onSaved }: ModularEdit
       .filter(def =>
         def.id !== "landing" &&
         !!def.EditorPanel &&
-        (def.alwaysActive || activeIds.includes(def.id)) &&
+        (def.alwaysActive || activeIds.includes(def.id) ||
+          (def.priceUC === 0 && def.dependencies.length > 0 &&
+          def.dependencies.every(dep => activeIds.includes(dep as BlockId)))) &&
         (isAutogestionado || blockPerms?.[def.id] !== false)
       )
       .sort((a, b) => (a.adminOrder ?? 99) - (b.adminOrder ?? 99)),
@@ -170,13 +184,25 @@ export default function ModularEditor({ negocio, onClose, onSaved }: ModularEdit
   // ── Guardar manual ────────────────────────────────────────────────────────
   const handleSave = async () => {
     setSaving(true);
+
+    // Guardar config_web del negocio
     const { error } = await supabase.from("negocios").update({
       config_web: config,
       ...Object.fromEntries(DB_FIELDS.map(f => [f, dbFields[f] || null])),
     }).eq("id", negocio.id);
 
+    if (error) { setSaving(false); alert("Error al guardar: " + error.message); return; }
+
+    // Si el orden cambió, guardarlo en tenant_blocks del landing
+    if (sectionOrder.length > 0) {
+      await supabase
+        .from("tenant_blocks")
+        .update({ config: { sectionOrder } })
+        .eq("negocio_id", negocio.id)
+        .eq("block_id", "landing");
+    }
+
     setSaving(false);
-    if (error) { alert("Error al guardar: " + error.message); return; }
     setSaved(true);
     setDirty(false);
     setTimeout(() => setSaved(false), 2500);
@@ -296,9 +322,12 @@ export default function ModularEditor({ negocio, onClose, onSaved }: ModularEdit
         </div>
 
         {/* Panel activo */}
-        <div className="flex-1 overflow-y-auto p-5 pb-24">
+        <div ref={panelRef} className="flex-1 overflow-y-auto p-5 pb-24">
           {activeTab === "_order" ? (
-            <SectionOrderManager negocioId={negocio.id} />
+            <SectionOrderManager
+              negocioId={negocio.id}
+              onOrderChange={(order) => { setSectionOrder(order); setDirty(true); }}
+            />
           ) : ActivePanel ? (
             <ActivePanel {...editorProps} />
           ) : (

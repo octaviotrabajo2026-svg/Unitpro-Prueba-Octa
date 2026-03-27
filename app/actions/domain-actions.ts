@@ -1,7 +1,13 @@
 "use server";
 
-import { createClient } from "@/lib/supabase-server";
+import { createClient as createServerClient } from "@supabase/supabase-js";
 import { revalidatePath } from "next/cache";
+
+// Cliente con service_role que bypasea RLS
+const supabaseAdmin = createServerClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.SUPABASE_SERVICE_ROLE_KEY!
+);
 
 // Constantes de configuración desde variables de entorno
 const PROJECT_ID_VERCEL = process.env.PROJECT_ID_VERCEL;
@@ -16,7 +22,6 @@ const getVercelEndpoint = (path: string) => {
 
 // --- ACTION 1: AÑADIR DOMINIO ---
 export async function addDomain(domain: string, negocioId: string) {
-  const supabase = await createClient();
 
   // 1. Limpieza básica del dominio (lowercase, trim)
   const cleanDomain = domain.toLowerCase().trim();
@@ -42,12 +47,14 @@ export async function addDomain(domain: string, negocioId: string) {
     }
 
     // 3. Si Vercel acepta, guardamos en Supabase
-    const { error: dbError } = await supabase
+    const { data: updated, error: dbError } = await supabaseAdmin
       .from("negocios")
       .update({ custom_domain: cleanDomain })
-      .eq("id", negocioId);
+      .eq("id", negocioId)
+      .select("id")
+      .single();
 
-    if (dbError) {
+    if (dbError || !updated){
       // Rollback: Si falla la DB, lo borramos de Vercel para no dejar basura
       await fetch(getVercelEndpoint(`v9/projects/${PROJECT_ID_VERCEL}/domains/${cleanDomain}`), {
         method: "DELETE",
@@ -67,7 +74,6 @@ export async function addDomain(domain: string, negocioId: string) {
 
 // --- ACTION 2: ELIMINAR DOMINIO ---
 export async function removeDomain(domain: string, negocioId: string) {
-  const supabase = await createClient();
 
   try {
     // 1. Eliminar de Vercel
@@ -85,7 +91,7 @@ export async function removeDomain(domain: string, negocioId: string) {
     }
 
     // 2. Eliminar de Supabase
-    const { error: dbError } = await supabase
+    const { error: dbError } = await supabaseAdmin
       .from("negocios")
       .update({ custom_domain: null }) // Ponemos null
       .eq("id", negocioId);
@@ -138,11 +144,10 @@ export async function checkDomainStatus(domain: string) {
 }
 
 export async function updateSiteMetadata(negocioId: string, metadata: { title: string, faviconUrl: string }) {
-  const supabase = await createClient();
 
   try {
     // 1. Obtenemos la config actual para no sobrescribir todo
-    const { data: negocio, error: fetchError } = await supabase
+    const { data: negocio, error: fetchError } = await supabaseAdmin
       .from("negocios")
       .select("config_web")
       .eq("id", negocioId)
@@ -162,7 +167,7 @@ export async function updateSiteMetadata(negocioId: string, metadata: { title: s
     };
 
     // 3. Guardamos
-    const { error: updateError } = await supabase
+    const { error: updateError } = await supabaseAdmin
       .from("negocios")
       .update({ config_web: updatedConfig })
       .eq("id", negocioId);

@@ -329,9 +329,11 @@ export default function LandingPanel({ negocio, config, updateConfig, updateConf
               placeholder="Título que aparece en Google" />
           </div>
           <div>
-            <Label>URL del Favicon</Label>
-            <Input value={seo.favicon} onChange={(v: string) => updateConfig("seo", "favicon", v)}
-              placeholder="https://..." />
+            <ImageUpload
+              label="Favicon"
+              value={seo.favicon}
+              onChange={(url: string) => updateConfig("seo", "favicon", url)}
+            />
           </div>
         </section>
       )}

@@ -11,7 +11,7 @@ import { useRouter, useParams } from 'next/navigation';
 import WebEditor from './WebEditor';
 import BlockMarketplace from '@/components/dashboards/BlockMarketplace';
 import LandingAgenciaEditor from './LandingAgenciaEditor';
-import { toggleClientPlanStatus, deleteClientComplete } from '@/app/actions/admin/agency-actions';
+import { toggleClientPlanStatus, deleteClientComplete, toggleAgencyBillingForNegocio } from '@/app/actions/admin/agency-actions';
 import { AgencyClient, AgencyProfile } from '@/types/agency';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import InlineAlert from '@/components/ui/InlineAlert';
@@ -43,9 +43,10 @@ export default function DashboardAgencia() {
   const [blocksPanelNegocio, setBlocksPanelNegocio] = useState<{ id: number; nombre: string } | null>(null);
   const [showAgencyCfg, setShowAgencyCfg] = useState(false);
   const [showLandingEditor, setShowLandingEditor] = useState(false);
-  const [blocksTab, setBlocksTab] = useState<'orden' | 'tienda'>('orden');
+  const [blocksTab, setBlocksTab] = useState<'orden' | 'tienda'| 'billing'>('orden');
   const [blockPerms, setBlockPerms] = useState<Record<string, boolean>>({});
   const [loadingPerms, setLoadingPerms] = useState(false);
+
 
   // ConfirmDialog
   const [confirmDialog, setConfirmDialog] = useState<{
@@ -303,6 +304,12 @@ export default function DashboardAgencia() {
                 >
                   Tienda de Bloques
                 </button>
+                <button
+                  onClick={() => setBlocksTab('billing')}
+                  className={`px-4 py-2 rounded-full text-xs font-bold transition-colors ${blocksTab === 'billing' ? 'bg-[#577a2c] text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
+                >
+                  Billing
+                </button>
               </div>
 
               {blocksTab === 'orden' && (
@@ -314,20 +321,25 @@ export default function DashboardAgencia() {
                   <BlockMarketplace negocioId={blocksPanelNegocio.id} isAgency={true} />
 
                   <div className="border-t border-slate-200 pt-6">
-                    <h4 className="font-bold text-slate-800 text-sm mb-1">Permisos de edición del negocio</h4>
-                    <p className="text-xs text-slate-500 mb-4">¿Qué puede editar este negocio en su dashboard?</p>
+                    <h4 className="font-bold text-slate-800 text-sm mb-1">Visibilidad de tabs del dashboard</h4>
+                    <p className="text-xs text-slate-500 mb-4">Controlá qué secciones puede ver este negocio en su panel.</p>
 
                     {loadingPerms ? (
                       <div className="flex justify-center py-4"><Loader2 size={20} className="animate-spin text-slate-400" /></div>
                     ) : (
                       <div className="space-y-2">
                         {[
-                          { id: 'calendar', label: 'Calendario', icon: '📅' },
-                          { id: 'shop', label: 'Tienda', icon: '🛍️' },
-                          { id: 'academy', label: 'Academia', icon: '🎓' },
-                          { id: 'gallery', label: 'Galería', icon: '🖼️' },
-                          { id: 'crm', label: 'CRM / Pipeline', icon: '📊' },
-                          { id: 'about', label: 'Nosotros', icon: '👥' },
+                          { id: 'calendar',      label: 'Calendario',    icon: '📅' },
+                          { id: 'crm',           label: 'CRM / Pipeline',icon: '📊' },
+                          { id: 'shop',          label: 'Tienda',        icon: '🛍️' },
+                          { id: 'academy',       label: 'Academia',      icon: '🎓' },
+                          { id: 'gallery',       label: 'Galería',       icon: '🖼️' },
+                          { id: 'about',         label: 'Nosotros',      icon: '👥' },
+                          { id: 'suscripcion',   label: 'Suscripción',   icon: '💳' },
+                          { id: 'bloques',       label: 'Mis Bloques',   icon: '🧩' },
+                          { id: 'configuracion', label: 'Configuración', icon: '⚙️' },
+                          { id: 'analytics',     label: 'Analytics',     icon: '📈' },
+                          { id: 'marketing',     label: 'Marketing',     icon: '📣' },
                         ].map(({ id, label, icon }) => (
                           <div key={id} className="flex items-center justify-between p-3 bg-slate-50 rounded-xl border border-slate-100">
                             <span className="text-sm font-medium text-slate-700">{icon} {label}</span>
@@ -343,6 +355,13 @@ export default function DashboardAgencia() {
                     )}
                   </div>
                 </div>
+              )}
+              {blocksTab === 'billing' && blocksPanelNegocio && agency && (
+                <AgencyBillingPanel
+                  agencyId={agency.id}
+                  negocioId={blocksPanelNegocio.id}
+                  negocioNombre={blocksPanelNegocio.nombre}
+                />
               )}
             </div>
           </div>
@@ -379,7 +398,7 @@ export default function DashboardAgencia() {
           initialData={editingClient}
           model="negocio"
           onClose={() => setEditingClient(null)}
-          onSave={() => { setEditingClient(null); agency && cargarClientes(agency.id); }}
+          onSave={() => { agency && cargarClientes(agency.id); }}
         />
       )}
 
@@ -403,4 +422,74 @@ export default function DashboardAgencia() {
       />
     </div>
   );
+  function AgencyBillingPanel({
+  agencyId, negocioId, negocioNombre,
+}: {
+  agencyId: number; negocioId: number; negocioNombre: string;
+}) {
+  const supabase = createClient();
+  const [enforced, setEnforced] = useState<boolean | null>(null);
+  const [saving,   setSaving]   = useState(false);
+
+  useEffect(() => {
+    supabase
+      .from('agencies')
+      .select('billing_enforced_negocios')
+      .eq('id', agencyId)
+      .maybeSingle()
+      .then(({ data }) => {
+        const list: number[] = (data?.billing_enforced_negocios as number[]) ?? [];
+        setEnforced(list.includes(negocioId));
+      });
+  }, [agencyId, negocioId]);
+
+  const toggle = async () => {
+    if (enforced === null) return;
+    setSaving(true);
+    const result = await toggleAgencyBillingForNegocio(agencyId, negocioId, !enforced);
+    if (result.success) setEnforced(v => !v);
+    setSaving(false);
+  };
+
+  if (enforced === null) return (
+    <div className="flex justify-center py-8">
+      <Loader2 size={20} className="animate-spin text-slate-400" />
+    </div>
+  );
+
+  return (
+    <div className="space-y-4">
+      <p className="text-xs text-slate-500">
+        Controlá si <strong>{negocioNombre}</strong> debe consumir UnitCoins para activar bloques.
+      </p>
+      <div className="flex items-center justify-between p-4 bg-slate-50 rounded-xl border border-slate-100">
+        <div>
+          <p className="font-bold text-sm text-slate-900">Cobro por bloques</p>
+          <p className="text-xs text-slate-400 mt-0.5">
+            {enforced ? 'Este negocio consume UnitCoins al activar bloques.' : 'Este negocio activa bloques sin costo.'}
+          </p>
+        </div>
+        <div className="flex items-center gap-3">
+          <span className={`text-[11px] font-bold px-2.5 py-1 rounded-full ${
+            enforced ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-200 text-slate-500'
+          }`}>
+            {enforced ? 'Pago real' : 'Libre'}
+          </span>
+          <button
+            onClick={toggle}
+            disabled={saving}
+            className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+              enforced ? 'bg-[#577a2c]' : 'bg-slate-300'
+            } disabled:opacity-60`}
+          >
+            {saving
+              ? <Loader2 size={12} className="animate-spin text-white mx-auto" />
+              : <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${enforced ? 'translate-x-6' : 'translate-x-1'}`} />
+            }
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
 }

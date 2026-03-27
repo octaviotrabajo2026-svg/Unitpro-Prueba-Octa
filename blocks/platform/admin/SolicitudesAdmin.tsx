@@ -13,7 +13,7 @@ import {
 import {
   cancelAppointment,
   markDepositPaid,
-} from "@/app/actions/confirm-booking/manage-appointment";
+} from "@/blocks/calendar/actions";
 import type { BlockAdminProps } from "@/types/blocks";
 
 const PRIMARY = "#577a2c";

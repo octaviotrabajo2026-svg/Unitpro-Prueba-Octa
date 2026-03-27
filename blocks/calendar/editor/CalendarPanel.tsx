@@ -73,7 +73,7 @@ export default function CalendarPanel({
   const booking   = config.booking   || { requestDeposit: false, requireManualConfirmation: true, depositPercentage: 50 };
   const schedule  = config.schedule  || {};
 
-  const [openWorker, setOpenWorker] = useState<number | null>(null);
+  
 
   // ── Servicios ─────────────────────────────────────────────────────────────
   const addServicio = () => pushToArray("servicios", {
@@ -174,23 +174,37 @@ export default function CalendarPanel({
                 <p className="text-[11px] text-zinc-400 italic">Sin grupos — todos los servicios se muestran juntos.</p>
               )}
               {grupos.map((grupo: any) => (
-                <div key={grupo.id} className="flex items-center gap-2 p-2 bg-zinc-50 rounded-lg border border-zinc-200">
+                <div key={grupo.id} className="p-3 bg-zinc-50 rounded-lg border border-zinc-200 space-y-2">
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="color"
+                      value={grupo.color || "#577a2c"}
+                      onChange={e => updateGrupo(grupo.id, "color", e.target.value)}
+                      className="w-7 h-7 rounded cursor-pointer border-0 p-0 bg-transparent"
+                      title="Color del grupo"
+                    />
+                    <input
+                      value={grupo.nombre}
+                      onChange={e => updateGrupo(grupo.id, "nombre", e.target.value)}
+                      className="flex-1 text-sm font-bold bg-transparent outline-none border-b border-transparent focus:border-zinc-300"
+                      placeholder="Nombre del grupo"
+                    />
+                    <button onClick={() => removeGrupo(grupo.id)}
+                      className="p-1 text-zinc-300 hover:text-red-500 transition-colors">
+                      <Trash2 size={13} />
+                    </button>
+                  </div>
                   <input
-                    type="color"
-                    value={grupo.color || "#577a2c"}
-                    onChange={e => updateGrupo(grupo.id, "color", e.target.value)}
-                    className="w-7 h-7 rounded cursor-pointer border-0 p-0 bg-transparent"
-                    title="Color del grupo"
+                    value={grupo.descripcion || ""}
+                    onChange={e => updateGrupo(grupo.id, "descripcion", e.target.value)}
+                    className="w-full text-xs bg-white border border-zinc-200 rounded-lg px-2 py-1.5 outline-none focus:ring-1 focus:ring-[#577a2c]/30"
+                    placeholder="Descripción del grupo (opcional)"
                   />
-                  <input
-                    value={grupo.nombre}
-                    onChange={e => updateGrupo(grupo.id, "nombre", e.target.value)}
-                    className="flex-1 text-sm font-bold bg-transparent outline-none border-b border-transparent focus:border-zinc-300"
+                  <ImageUpload
+                    label="Imagen del grupo (opcional)"
+                    value={grupo.imagenUrl || ""}
+                    onChange={url => updateGrupo(grupo.id, "imagenUrl", url)}
                   />
-                  <button onClick={() => removeGrupo(grupo.id)}
-                    className="p-1 text-zinc-300 hover:text-red-500 transition-colors">
-                    <Trash2 size={13} />
-                  </button>
                 </div>
               ))}
             </div>
@@ -216,16 +230,38 @@ export default function CalendarPanel({
                   </div>
                   <div>
                     <Label>Descripción breve</Label>
-                    <Input value={item.desc}
-                      onChange={(v: string) => updateArray("servicios", i, "desc", v)}
-                      placeholder="Descripción opcional" />
+                    <textarea
+                      value={item.desc ?? ""}
+                      onChange={e => updateArray("servicios", i, "desc", e.target.value)}
+                      placeholder="Descripción opcional"
+                      rows={3}
+                      className="w-full p-2 border border-zinc-200 rounded-lg text-sm bg-white focus:ring-2 focus:ring-[#577a2c]/30 outline-none resize-none"
+                    />
                   </div>
                   <div className="grid grid-cols-2 gap-3">
-                    <div>
+                    <div className="space-y-1.5">
                       <Label>Precio ($)</Label>
-                      <Input type="number" value={item.precio}
-                        onChange={(v: string) => updateArray("servicios", i, "precio", Number(v))}
-                        placeholder="0" />
+                      <div className="flex bg-zinc-100 p-0.5 rounded-lg border border-zinc-200 mb-1.5">
+                        {(["fijo", "desde", "hasta"] as const).map(tipo => (
+                          <button key={tipo} type="button"
+                            onClick={() => updateArray("servicios", i, "precioTipo", tipo)}
+                            className={`flex-1 py-1 text-[11px] font-bold rounded-md transition-all capitalize ${
+                              (item.precioTipo || "fijo") === tipo
+                                ? "bg-white shadow text-[#577a2c]"
+                                : "text-zinc-500"
+                            }`}>
+                            {tipo === "fijo" ? "Fijo" : tipo === "desde" ? "Desde" : "Hasta"}
+                          </button>
+                        ))}
+                      </div>
+                      <input
+                        type="number"
+                        value={item.precio ?? ""}
+                        onFocus={e => { if (Number(e.target.value) === 0) updateArray("servicios", i, "precio", ""); }}
+                        onChange={e => updateArray("servicios", i, "precio", e.target.value === "" ? 0 : Number(e.target.value))}
+                        placeholder="Ingresá el precio"
+                        className="w-full p-2 border border-zinc-200 rounded-lg text-sm bg-white focus:ring-2 focus:ring-[#577a2c]/30 outline-none"
+                      />
                     </div>
                     <div>
                       <Label>Duración</Label>
@@ -316,132 +352,7 @@ export default function CalendarPanel({
         )}
       </SectionCard>
 
-      {/* ── Equipo ─────────────────────────────────────────────────────── */}
-      <SectionCard title="Equipo / Profesionales" color="blue">
-        <div className="flex items-center justify-between">
-          <Toggle label="Mostrar equipo en la web" value={!!equipo.mostrar}
-            onChange={v => updateConfig("equipo", "mostrar", v)} />
-        </div>
-
-        {equipo.mostrar && (
-          <div className="space-y-3 animate-in fade-in">
-            <div>
-              <Label>Modo de horarios</Label>
-              <div className="flex bg-zinc-100 p-1 rounded-xl border border-zinc-200">
-                {[["unified","Horario General"],["per_worker","Por Profesional"]].map(([val, lbl]) => (
-                  <button key={val} onClick={() => updateConfig("equipo", "scheduleType", val)}
-                    className={`flex-1 py-1.5 text-[11px] font-bold rounded-lg transition-all ${(equipo.scheduleType || "unified") === val ? "bg-white shadow text-[#577a2c]" : "text-zinc-500"}`}>
-                    {lbl}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {(equipo.items || []).map((m: any, i: number) => (
-              <div key={m.id || i} className="border border-zinc-200 rounded-xl bg-zinc-50 overflow-hidden">
-                {/* Cabecera */}
-                <div className="flex items-center justify-between p-3">
-                  <button onClick={() => setOpenWorker(openWorker === i ? null : i)}
-                    className="flex items-center gap-2 text-left flex-1 min-w-0">
-                    <div className="w-7 h-7 rounded-full bg-zinc-200 flex items-center justify-center shrink-0">
-                      {m.photoUrl
-                        ? <img src={m.photoUrl} className="w-full h-full object-cover rounded-full" alt="" />
-                        : <User size={14} className="text-zinc-500" />}
-                    </div>
-                    <span className="font-bold text-sm text-zinc-800 truncate">{m.nombre || "Profesional"}</span>
-                    {openWorker === i ? <ChevronUp size={14} className="ml-auto shrink-0 text-zinc-400" /> : <ChevronDown size={14} className="ml-auto shrink-0 text-zinc-400" />}
-                  </button>
-                  <button onClick={() => removeFromArray("equipo", i)}
-                    className="p-1.5 text-zinc-300 hover:text-red-500 transition-colors ml-2 shrink-0">
-                    <Trash2 size={14} />
-                  </button>
-                </div>
-
-                {openWorker === i && (
-                  <div className="px-3 pb-3 space-y-3 border-t border-zinc-100 pt-3 animate-in fade-in">
-                    <div>
-                      <Label>Nombre</Label>
-                      <Input value={m.nombre}
-                        onChange={(v: string) => updateArray("equipo", i, "nombre", v)} />
-                    </div>
-                    
-                    <div>
-                      <Label>Rol / Especialidad</Label>
-                      <Input value={m.role}
-                        onChange={(v: string) => updateArray("equipo", i, "role", v)}
-                        placeholder="Ej: Estilista" />
-                    </div>
-                    {/* Campos de Contacto, Pagos y Simultaneidad */}
-                    <div className="space-y-3">
-                      <div>
-                        <Label>Email para notificaciones</Label>
-                        <Input value={m.email} onChange={(v: string) => updateArray("equipo", i, "email", v)} placeholder="profesional@correo.com" />
-                      </div>
-                      
-                      <div className="grid grid-cols-2 gap-3">
-                        <div>
-                          <Label>Teléfono / WhatsApp</Label>
-                          <Input value={m.telefono} onChange={(v: string) => updateArray("equipo", i, "telefono", v)} placeholder="Ej: 54911..." />
-                        </div>
-                        <div>
-                          <Label>Instagram (@usuario)</Label>
-                          <Input value={m.instagram} onChange={(v: string) => updateArray("equipo", i, "instagram", v)} placeholder="@usuario" />
-                        </div>
-                      </div>
-
-                      <div className="bg-indigo-50/50 p-3 rounded-xl border border-indigo-100 space-y-2">
-                        <Label><span className="text-indigo-700 flex items-center gap-1"><CreditCard size={12}/> Link de pago (MP)</span></Label>
-                        <Input value={m.paymentLink} onChange={(v: string) => updateArray("equipo", i, "paymentLink", v)} placeholder="https://mpago.la/..." />
-                      </div>
-
-                      <div className="bg-emerald-50/50 p-3 rounded-xl border border-emerald-100 space-y-2">
-                        <Label><span className="text-emerald-700">Alias / CBU para Señas</span></Label>
-                        <Input value={m.aliasCvu} onChange={(v: string) => updateArray("equipo", i, "aliasCvu", v)} placeholder="mi.alias.mp" />
-                      </div>
-
-                      <div className="bg-amber-50/50 p-3 rounded-xl border border-amber-100 space-y-3">
-                        <Toggle 
-                          label="¿Atiende a más de uno a la vez?" 
-                          value={!!m.allowSimultaneous}
-                          onChange={(v) => {
-                            updateArray("equipo", i, "allowSimultaneous", v);
-                            if (v && (!m.simultaneousCapacity || m.simultaneousCapacity < 2)) {
-                              updateArray("equipo", i, "simultaneousCapacity", 2);
-                            }
-                          }}
-                        />
-                        {m.allowSimultaneous && (
-                          <div className="animate-in fade-in">
-                            <Label>Capacidad máxima (personas)</Label>
-                            <Input type="number" min="2" value={m.simultaneousCapacity} onChange={(v: any) => updateArray("equipo", i, "simultaneousCapacity", parseInt(v))} />
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                    <ImageUpload label="Foto" value={m.photoUrl}
-                      onChange={url => updateArray("equipo", i, "photoUrl", url)} />
-                    {equipo.scheduleType === "per_worker" && (
-                      <div>
-                        <Label>Horario de {m.nombre || "este profesional"}</Label>
-                        <ScheduleEditor
-                          schedule={m.schedule || schedule}
-                          onChange={s => updateArray("equipo", i, "schedule", s)}
-                        />
-                      </div>
-                    )}
-                  </div>
-                  
-                )}
-              </div>
-            ))}
-
-            <button onClick={addMiembro}
-              className="w-full py-2.5 border-2 border-dashed border-zinc-300 rounded-xl text-zinc-500 text-sm font-bold hover:border-blue-400 hover:text-blue-600 hover:bg-blue-50 transition-all flex items-center justify-center gap-2">
-              <Plus size={16} /> Agregar profesional
-            </button>
-          </div>
-        )}
-      </SectionCard>
+      
 
       {/* ── Configuración de Reservas ───────────────────────────────────── */}
       <SectionCard title="Configuración de Reservas" color="amber">
@@ -450,6 +361,14 @@ export default function CalendarPanel({
             onChange={v => updateConfig("booking", "requireManualConfirmation", v)} />
           <p className="text-xs text-zinc-400 -mt-2">
             Si está activado, los turnos quedan pendientes hasta que los aprobés.
+          </p>
+
+          <div className="h-px bg-zinc-100" />
+
+          <Toggle label="Permitir seleccionar varios servicios" value={!!(booking as any).allowMultipleServices}
+            onChange={v => updateConfig("booking", "allowMultipleServices", v)} />
+          <p className="text-xs text-zinc-400 -mt-2">
+            Si está activado, el cliente puede reservar más de un servicio en el mismo turno.
           </p>
 
           <div className="h-px bg-zinc-100" />
@@ -466,6 +385,24 @@ export default function CalendarPanel({
                 className="w-full accent-[#577a2c]" />
             </div>
           )}
+          <div className="h-px bg-zinc-100" />
+
+          <div>
+            <Label>Intervalo entre turnos</Label>
+            <div className="flex bg-zinc-100 p-1 rounded-xl border border-zinc-200">
+              {([15, 30, 60] as const).map(min => (
+                <button key={min} type="button"
+                  onClick={() => updateConfig("booking", "slotInterval", min)}
+                  className={`flex-1 py-1.5 text-[11px] font-bold rounded-lg transition-all ${
+                    ((booking as any).slotInterval ?? 30) === min
+                      ? "bg-white shadow text-[#577a2c]"
+                      : "text-zinc-500"
+                  }`}>
+                  {min} min
+                </button>
+              ))}
+            </div>
+          </div>
         </div>
       </SectionCard>
 

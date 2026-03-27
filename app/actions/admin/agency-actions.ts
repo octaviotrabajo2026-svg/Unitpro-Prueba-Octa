@@ -247,26 +247,121 @@ export async function toggleClientPlanStatus(
   return error ? { success: false, error: error.message } : { success: true, newStatus };
 }
 
-// ── Activar / desactivar bloque de un cliente (bypasa RLS) ───────────────────
+// ── Helpers de billing ────────────────────────────────────────────────────────
+
+async function getBillingEnforced(): Promise<{ negocio_ids: number[]; agency_ids: number[] }> {
+  const { data } = await supabaseAdmin
+    .from('platform_config')
+    .select('value')
+    .eq('key', 'billing_enforced')
+    .maybeSingle();
+  return (data?.value as any) ?? { negocio_ids: [], agency_ids: [] };
+}
+
+async function isBillingEnforced(negocioId: number): Promise<boolean> {
+  const config = await getBillingEnforced();
+
+  // Negocio autogestionado → revisar lista de negocios
+  if (config.negocio_ids?.includes(negocioId)) return true;
+
+  // Negocio con agencia → revisar lista de agencias
+  const { data: neg } = await supabaseAdmin
+    .from('negocios')
+    .select('agency_id')
+    .eq('id', negocioId)
+    .maybeSingle();
+
+  if (neg?.agency_id && config.agency_ids?.includes(neg.agency_id)) return true;
+
+  return false;
+}
+
+async function getBlockPrice(blockId: string): Promise<number> {
+  const { data } = await supabaseAdmin
+    .from('platform_config')
+    .select('value')
+    .eq('key', 'block_prices')
+    .maybeSingle();
+  return (data?.value as any)?.[blockId] ?? 0;
+}
+
+// ── Billing de agencia sobre sus negocios ─────────────────────────────────────
+
+async function getAgencyBillingEnforced(agencyId: number): Promise<number[]> {
+  const { data } = await supabaseAdmin
+    .from('agencies')
+    .select('billing_enforced_negocios')
+    .eq('id', agencyId)
+    .maybeSingle();
+  return (data?.billing_enforced_negocios as number[]) ?? [];
+}
+
+export async function isAgencyBillingEnforced(
+  agencyId: number,
+  negocioId: number
+): Promise<boolean> {
+  const list = await getAgencyBillingEnforced(agencyId);
+  return list.includes(negocioId);
+}
+
+export async function toggleAgencyBillingForNegocio(
+  agencyId: number,
+  negocioId: number,
+  enforce: boolean
+): Promise<{ success: boolean; error?: string }> {
+  const current = await getAgencyBillingEnforced(agencyId);
+  const updated = enforce
+    ? [...new Set([...current, negocioId])]
+    : current.filter((id: number) => id !== negocioId);
+
+  const { error } = await supabaseAdmin
+    .from('agencies')
+    .update({ billing_enforced_negocios: updated })
+    .eq('id', agencyId);
+
+  return error ? { success: false, error: error.message } : { success: true };
+}
+
+// ── Activar / desactivar bloque de un cliente (con enforcement condicional) ───
 export async function toggleClientBlock(
   negocioId: number,
   blockId: string,
   activate: boolean
 ): Promise<{ success: boolean; error?: string }> {
   if (activate) {
+    const shouldCharge = await isBillingEnforced(negocioId);
+
+    if (shouldCharge) {
+      const price = await getBlockPrice(blockId);
+      if (price > 0) {
+        // Importación dinámica para evitar circular dependency
+        const { deductCoins } = await import('@/lib/unitcoins');
+        const ok = await deductCoins(
+          negocioId,
+          price,
+          `Activación de bloque: ${blockId}`,
+          { block_id: blockId }
+        );
+        if (!ok) return { success: false, error: 'Saldo insuficiente de UnitCoins.' };
+      }
+    }
+
     const { error } = await supabaseAdmin
-      .from("tenant_blocks")
+      .from('tenant_blocks')
       .upsert(
-        { negocio_id: negocioId, block_id: blockId, active: true, activated_at: new Date().toISOString(), config: {} },
-        { onConflict: "negocio_id,block_id" }
+        { negocio_id: negocioId, block_id: blockId, active: true,
+          activated_at: new Date().toISOString(), config: {} },
+        { onConflict: 'negocio_id,block_id' }
       );
     return error ? { success: false, error: error.message } : { success: true };
+
   } else {
     const { error } = await supabaseAdmin
-      .from("tenant_blocks")
+      .from('tenant_blocks')
       .update({ active: false })
-      .eq("negocio_id", negocioId)
-      .eq("block_id", blockId);
+      .eq('negocio_id', negocioId)
+      .eq('block_id', blockId);
     return error ? { success: false, error: error.message } : { success: true };
   }
+  
 }

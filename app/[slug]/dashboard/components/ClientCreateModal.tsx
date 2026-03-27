@@ -33,7 +33,7 @@ const TEMPLATES = [
     id: 'confirm_booking',
     name: 'Turnos Online',
     desc: 'Landing + agenda de turnos + valoraciones. Ideal para peluquerías, clínicas, estudios.',
-    blocks: ['landing', 'calendar', 'reviews'],
+    blocks: ['landing', 'calendar','crm', 'reviews'],
     color: 'from-blue-500 to-indigo-600',
   },
 ];

@@ -8,6 +8,7 @@ import { BLOCKS_REGISTRY } from "@/blocks/_registry";
 import LandingModularPreview from "@/components/LandingModularPreview";
 import type { BlockId } from "@/types/blocks";
 import DynamicFont from "@/components/ui/DynamicFont";
+import ContactSection from "@/blocks/crm/public/ContactSection";
 
 interface LandingModularProps {
   negocio:   any;
@@ -81,7 +82,11 @@ export default async function LandingModular({ negocio, isPreview = false }: Lan
             config={dbBlock?.config ?? {}}
           />
         );
-      })}
+      }
+      )}
+      {!ordered.includes("crm" as BlockId) && (
+        <ContactSection negocio={negocio} config={{}} />
+      )}
     </div>
   );
 }

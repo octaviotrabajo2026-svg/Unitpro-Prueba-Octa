@@ -14,7 +14,7 @@ import {
   Check, Loader2,
 } from "lucide-react";
 import { createClient }          from "@/lib/supabase";
-import { cancelAppointment }     from "@/app/actions/confirm-booking/manage-appointment";
+import { cancelAppointment } from "@/blocks/calendar/actions";
 import ManualBookingManager      from "@/components/dashboards/ManualBookingManager";
 import BlockTimeManager          from "@/components/dashboards/BlockTimeManager";
 import type { BlockAdminProps }  from "@/types/blocks";

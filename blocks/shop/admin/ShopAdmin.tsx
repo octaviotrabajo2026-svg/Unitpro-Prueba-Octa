@@ -32,6 +32,7 @@ import { Plus, Edit2, ShoppingBag, Package, X } from 'lucide-react';
 import { createClient } from '@/lib/supabase';
 import { ImageUpload } from '@/components/ui/ImageUpload';
 import type { BlockAdminProps } from '@/types/blocks';
+import { markOrderPaid, fulfillOrder, cancelOrder } from "@/blocks/shop/actions";
 
 interface Product {
   id: string;
@@ -218,18 +219,15 @@ export default function ShopAdmin({ negocio }: BlockAdminProps) {
 
   /** Marca una orden como completada */
   async function markOrderFulfilled(id: string) {
-    const { error } = await supabase
-      .from('orders')
-      .update({ status: 'fulfilled' })
-      .eq('id', id);
-    if (!error) {
-      setOrders(prev =>
-        prev.map(o => o.id === id ? { ...o, status: 'fulfilled' } : o)
-      );
-    } else {
-      alert('Error: ' + error.message);
-    }
+  const result = await fulfillOrder(id);
+  if (result.success) {
+    setOrders(prev =>
+      prev.map(o => o.id === id ? { ...o, status: 'fulfilled' } : o)
+    );
+  } else {
+    alert('Error: ' + (result.error || 'No se pudo completar'));
   }
+}
 
   return (
     <div className="max-w-4xl animate-in fade-in">

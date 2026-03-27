@@ -5,6 +5,7 @@ import { useState, useEffect } from 'react';
 import { GraduationCap, Clock, BookOpen, X } from 'lucide-react';
 import { createClient } from '@/lib/supabase';
 import type { BlockSectionProps } from '@/types/blocks';
+import { enrollStudent } from "@/blocks/academy/actions";
 
 interface Course {
   id: string;
@@ -96,23 +97,22 @@ export default function AcademySection({ negocio, config }: BlockSectionProps) {
 
   /** Registra la inscripción en course_enrollments */
   async function handleEnroll() {
-    if (!enrollEmail.trim() || !selectedCourse) return;
-    setEnrolling(true);
-    try {
-      const { error } = await supabase.from('course_enrollments').insert({
-        course_id:     selectedCourse.id,
-        student_name:  enrollName.trim() || null,
-        student_email: enrollEmail.trim().toLowerCase(),
-        paid_amount:   0,
-      });
-      if (error) throw error;
-      setEnrollSuccess(true);
-    } catch (err: any) {
-      alert('Error al inscribirse: ' + err.message);
-    } finally {
-      setEnrolling(false);
-    }
+  if (!enrollEmail.trim() || !selectedCourse) return;
+  setEnrolling(true);
+  try {
+    const result = await enrollStudent(negocio.slug, {
+      courseId: selectedCourse.id,
+      studentName: enrollName.trim() || undefined,
+      studentEmail: enrollEmail.trim(),
+    });
+    if (!result.success) throw new Error(result.error);
+    setEnrollSuccess(true);
+  } catch (err: any) {
+    alert('Error al inscribirse: ' + err.message);
+  } finally {
+    setEnrolling(false);
   }
+}
 
   const ctaText = academyConfig.ctaText || 'Inscribirme';
 

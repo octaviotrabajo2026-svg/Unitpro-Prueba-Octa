@@ -1,7 +1,7 @@
 "use client";
 // blocks/platform/admin/SuscripcionAdmin.tsx
 import { useState, useEffect } from "react";
-import { Coins, ArrowUpRight, ArrowDownLeft, Package, TrendingUp, Lock } from "lucide-react";
+import { Coins, ArrowUpRight, ArrowDownLeft, Package, TrendingUp, Lock, Check } from "lucide-react";
 import { createClient } from "@/lib/supabase";
 import { getBalance, getTransactionHistory, type Transaction } from "@/lib/unitcoins";
 import { UCoin } from "@/components/ui/UnitCoin";
@@ -18,6 +18,15 @@ export default function SuscripcionAdmin({ negocio }: BlockAdminProps) {
   const [balance, setBalance] = useState<number>(0);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [activeBlockIds, setActiveBlockIds] = useState<BlockId[]>([]);
+  const [billingFree, setBillingFree] = useState(true);
+  useEffect(() => {
+    const supabase = createClient();
+    supabase.from('platform_config').select('value').eq('key','billing_enforced').maybeSingle()
+      .then(({ data }) => {
+        const cfg = (data?.value as any) || { negocio_ids: [], agency_ids: [] };
+        setBillingFree(!cfg.negocio_ids?.includes(negocio.id));
+      });
+  }, [negocio.id]);
 
   useEffect(() => {
     getBalance(negocio.id).then(setBalance);
@@ -50,6 +59,11 @@ export default function SuscripcionAdmin({ negocio }: BlockAdminProps) {
         <h1 className="text-2xl font-bold">UnitCoins</h1>
         <p className="text-zinc-500 text-sm">Tu moneda interna para activar y usar funcionalidades.</p>
       </header>
+      {billingFree && (
+        <div className="flex items-center gap-2 p-3 bg-emerald-50 border border-emerald-200 rounded-xl text-sm text-emerald-700 font-medium">
+          <Check size={14} /> Cuenta en modo libre — los bloques se activan sin costo de UnitCoins.
+        </div>
+      )}
 
       {/* 1. Balance card */}
       <section className="bg-white rounded-2xl border border-zinc-200 shadow-sm p-6">

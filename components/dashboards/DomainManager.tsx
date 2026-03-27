@@ -204,7 +204,7 @@ export default function DomainManager({
               {!status?.valid && (
                 <div className="bg-gray-50 p-4 rounded-lg border border-gray-200 mb-6 text-sm">
                     <p className="font-bold mb-2">Configura tus DNS en tu proveedor:</p>
-                    <p className="font-mono mb-1">Tipo A &rarr; 76.76.21.21</p>
+                    <p className="font-mono mb-1">Tipo A &rarr; 216.198.79.1</p>
                     <p className="font-mono">CNAME www &rarr; cname.vercel-dns.com</p>
                 </div>
               )}

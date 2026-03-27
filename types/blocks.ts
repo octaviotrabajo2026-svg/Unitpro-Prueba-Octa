@@ -47,9 +47,9 @@ export interface BlockEditorProps {
 export type BlockId =
   | 'resumen' | 'solicitudes' | 'suscripcion' | 'configuracion' | 'bloques'
   | 'landing' | 'about'
-  | 'calendar' | 'crm' | 'gallery' | 'reviews'
+  | 'calendar' |'equipo' | 'crm' | 'gallery' | 'reviews'
   | 'analytics' | 'marketing' | 'payments' | 'chat'
-  | 'shop' | 'academy' | 'chatbot';
+  | 'shop' | 'academy';
 
 export type BlockCategory = 'platform' | 'core' | 'services' | 'commerce' | 'marketing' | 'future';
 

@@ -126,8 +126,8 @@ export async function generateMetadata(
   const config = negocio.config_web || {};
   const meta = config.metadata || {};
 
-  const siteName = meta.title || negocio.nombre || "Create With UnitPro";
-  const favicon = meta.faviconUrl || "/favicon.png";
+  const siteName = meta.title || config.seo?.title || negocio.nombre || "Create With UnitPro";
+  const favicon = meta.faviconUrl || config.seo?.favicon || "/favicon.png";
 
   return {
     title: siteName,

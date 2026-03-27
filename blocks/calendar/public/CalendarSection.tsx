@@ -7,12 +7,11 @@ import {
   CalendarIcon, Clock, CheckCircle, X, Loader2,
   ChevronLeft, User, Users, Star, Tag, Image as ImageIcon,
 } from "lucide-react";
-import { checkAvailability } from "@/app/actions/confirm-booking/check-availability";
-import { createAppointment } from "@/app/actions/confirm-booking/manage-appointment";
+import { checkAvailability, createAppointment } from "@/blocks/calendar/actions";
 import type { BlockSectionProps } from "@/types/blocks";
 import { formatDuration } from "@/lib/format-duration";
 
-const INTERVAL_STEP = 30;
+
 
 export default function CalendarSection({ negocio, config: blockConfig }: BlockSectionProps) {
   const supabase = createClient();
@@ -28,6 +27,7 @@ export default function CalendarSection({ negocio, config: blockConfig }: BlockS
   };
 
   const brandColor  = cfg.colors.primary as string;
+  const INTERVAL_STEP = (cfg.booking as any).slotInterval ?? 30;
   const textColor   = (raw.colors?.text as string) || "#1f2937";
   const requireManual = !!(cfg.booking as any).requireManualConfirmation;
   const allowMultipleServices = !!(cfg.booking as any).allowMultipleServices;
@@ -52,6 +52,7 @@ export default function CalendarSection({ negocio, config: blockConfig }: BlockS
   const [mostrarGracias,   setMostrarGracias]   = useState(false);
   const [wasPending,       setWasPending]       = useState(true); // para el mensaje de éxito
   const [selectedServices, setSelectedServices] = useState<any[]>([]);
+  const [grupoExpandido, setGrupoExpandido] = useState<string | null>(null);
 
   const [bookingData, setBookingData] = useState({
     date: "", time: "", worker: null as any,
@@ -278,8 +279,21 @@ export default function CalendarSection({ negocio, config: blockConfig }: BlockS
     setBookingData(p => ({ ...p, date:"", time:"", worker:null, images:[] }));
   };
 
-  const allServices = [...((cfg.servicios as any)?.items || []), ...(raw.services || [])];
-  const equipo      = (cfg.equipo as any)?.items || [];
+  const grupos: any[]   = (cfg.servicios as any)?.grupos || [];
+  const hayGrupos       = grupos.length > 0;
+  const allServices     = [...((cfg.servicios as any)?.items || []), ...(raw.services || [])];
+  const equipo          = (cfg.equipo as any)?.items || [];
+
+  // Servicios filtrados por grupo activo (solo aplica si hay grupos)
+
+  function fmtPrecio(precio: any, tipo?: string): string {
+    const n = Number(precio);
+    if (isNaN(n) || n === 0) return "";
+    const formatted = new Intl.NumberFormat("es-AR").format(n);
+    if (tipo === "desde") return `Desde $${formatted}`;
+    if (tipo === "hasta") return `Hasta $${formatted}`;
+    return `$${formatted}`;
+  }
 
   // ── Render ─────────────────────────────────────────────────────────────────
   return (
@@ -297,91 +311,182 @@ export default function CalendarSection({ negocio, config: blockConfig }: BlockS
             </div>
           )}
 
-          <div className="grid lg:grid-cols-3 gap-8">
-            {allServices.map((service: any, i: number) => {
-              let isPromo = service.isPromo && service.promoEndDate;
-              if (isPromo && new Date(service.promoEndDate + "T23:59:59") < new Date()) isPromo = false;
-              const titulo    = service.name    || service.titulo;
-              const precio    = service.price   || service.precio;
-              const desc      = service.description || service.desc;
-              const duracion  = Number(service.duration || service.duracion || 60);
-              const imagenUrl = service.image   || service.imagenUrl;
+          {/* ── Tabs de grupos (solo si hay grupos definidos) ── */}
+          {hayGrupos ? (
+            // ── Lista de grupos expandibles ──
+            <div className="space-y-4 max-w-3xl mx-auto">
+              {grupos.map((grupo: any) => {
+                const serviciosDelGrupo = allServices.filter((s: any) =>
+                  (s.grupoIds || []).includes(grupo.id)
+                );
+                const expandido = grupoExpandido === grupo.id;
 
-              return (
-                <div key={service.id || i}
-                  onClick={() => { toggleSvc(service); setBookingStep(1); setIsModalOpen(true); }}
-                  className={`relative p-8 transition-all duration-300 group cursor-pointer overflow-hidden ${cardRadius} ${
-                    isPromo
-                      ? "bg-gradient-to-br from-pink-50 to-white border-2 border-pink-200 shadow-lg shadow-pink-100 hover:-translate-y-2"
-                      : "border border-zinc-500/10 shadow-sm hover:shadow-xl hover:-translate-y-2"
-                  }`}
-                  style={{ backgroundColor: isPromo ? undefined : "rgba(255,255,255,0.05)" }}
-                >
-                  {isPromo && (
-                    <div className="absolute top-4 right-4 bg-pink-600 text-white text-[10px] font-bold px-3 py-1 rounded-full z-10 flex items-center gap-1">
-                      <Tag size={10} /> Oferta
-                    </div>
-                  )}
-                  {imagenUrl ? (
-                    <div className={`w-full h-48 mb-6 overflow-hidden shadow-md ${inputRadius}`}>
-                      <img src={imagenUrl} alt={titulo} className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500" />
-                    </div>
-                  ) : (
-                    <div className={`w-14 h-14 mb-6 text-white flex items-center justify-center shadow-lg ${inputRadius}`}
-                      style={{ backgroundColor: isPromo ? "#db2777" : brandColor }}>
-                      {isPromo ? <Tag size={28} /> : <CheckCircle size={28} />}
-                    </div>
-                  )}
-                  <h3 className="font-bold text-xl mb-3">{titulo}</h3>
-                  {precio != null && precio !== "" && Number(precio) !== 0 && (
-                    <p className="opacity-70 mb-4 font-medium">
-                      {typeof precio === "number" || !isNaN(Number(precio)) ? `$${precio}` : precio}
-                    </p>
-                  )}
-                  {isPromo && (
-                    <div className="mb-4 text-xs font-bold text-pink-600 bg-pink-100/50 p-2 rounded-lg text-center border border-pink-100">
-                      🔥 Válido hasta el {new Date(service.promoEndDate).toLocaleDateString("es-AR", { day: "numeric", month: "short" })}
-                    </div>
-                  )}
-                  <div className="flex items-center gap-2 text-xs font-bold text-zinc-400 mb-2">
-                    <Clock size={12} /><span>{formatDuration(duracion)}</span>
+                return (
+                  <div key={grupo.id}
+                    className={`bg-white border border-zinc-200 shadow-sm overflow-hidden transition-all duration-300 ${cardRadius}`}>
+
+                    {/* Cabecera del grupo */}
+                    <button
+                      onClick={() => setGrupoExpandido(expandido ? null : grupo.id)}
+                      className="w-full flex items-center gap-6 p-6 text-left hover:bg-zinc-50 transition-colors"
+                    >
+                      {grupo.imagenUrl && (
+                        <div className={`w-20 h-20 shrink-0 overflow-hidden ${inputRadius}`}>
+                          <img src={grupo.imagenUrl} alt={grupo.nombre}
+                            className="w-full h-full object-cover" />
+                        </div>
+                      )}
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 mb-1">
+                          {grupo.color && (
+                            <span className="w-2.5 h-2.5 rounded-full shrink-0"
+                              style={{ backgroundColor: grupo.color }} />
+                          )}
+                          <h3 className="font-bold text-lg" style={{ color: textColor }}>
+                            {grupo.nombre}
+                          </h3>
+                        </div>
+                        {grupo.descripcion && (
+                          <p className="text-sm opacity-60 line-clamp-2">{grupo.descripcion}</p>
+                        )}
+                        <p className="text-xs font-bold mt-2 opacity-50">
+                          {serviciosDelGrupo.length} servicio{serviciosDelGrupo.length !== 1 ? "s" : ""}
+                        </p>
+                      </div>
+                      <div className={`shrink-0 w-8 h-8 rounded-full flex items-center justify-center transition-transform duration-300 ${expandido ? "rotate-180" : ""}`}
+                        style={{ backgroundColor: brandColor + "20" }}>
+                        <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                          <path d="M3 5l4 4 4-4" stroke={brandColor} strokeWidth="2"
+                            strokeLinecap="round" strokeLinejoin="round"/>
+                        </svg>
+                      </div>
+                    </button>
+
+                    {/* Servicios desplegables */}
+                    {expandido && (
+                      <div className="border-t border-zinc-100 divide-y divide-zinc-100">
+                        {serviciosDelGrupo.length === 0 ? (
+                          <p className="text-sm text-zinc-400 text-center py-6 italic">
+                            Sin servicios en este grupo.
+                          </p>
+                        ) : serviciosDelGrupo.map((service: any, i: number) => {
+                          const titulo    = service.name    || service.titulo;
+                          const precio    = service.price   || service.precio;
+                          const desc      = service.description || service.desc;
+                          const duracion  = Number(service.duration || service.duracion || 60);
+                          const imagenUrl = service.image   || service.imagenUrl;
+
+                          return (
+                            <div key={service.id || i}
+                              onClick={() => { toggleSvc(service); setBookingStep(1); setIsModalOpen(true); }}
+                              className="flex items-center gap-4 px-6 py-4 cursor-pointer hover:bg-zinc-50 transition-colors group"
+                            >
+                              {imagenUrl ? (
+                                <div className={`w-14 h-14 shrink-0 overflow-hidden ${inputRadius}`}>
+                                  <img src={imagenUrl} alt={titulo}
+                                    className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-300" />
+                                </div>
+                              ) : (
+                                <div className={`w-14 h-14 shrink-0 flex items-center justify-center ${inputRadius}`}
+                                  style={{ backgroundColor: brandColor + "15" }}>
+                                  <CheckCircle size={20} style={{ color: brandColor }} />
+                                </div>
+                              )}
+                              <div className="flex-1 min-w-0">
+                                <p className="font-bold text-sm" style={{ color: textColor }}>{titulo}</p>
+                                {desc && (
+                                  <p className="text-xs opacity-60 mt-0.5 line-clamp-1">{desc}</p>
+                                )}
+                                <div className="flex items-center gap-3 mt-1">
+                                  <span className="text-xs opacity-50 flex items-center gap-1">
+                                    <Clock size={10} /> {formatDuration(duracion)}
+                                  </span>
+                                  {precio != null && precio !== "" && Number(precio) !== 0 && (
+                                    <span className="text-xs font-bold" style={{ color: brandColor }}>
+                                      {fmtPrecio(precio, service.precioTipo)}
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                              <div className={`shrink-0 px-4 py-2 text-xs font-bold text-white opacity-0 group-hover:opacity-100 transition-opacity ${btnRadius}`}
+                                style={{ backgroundColor: brandColor }}>
+                                Reservar
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
                   </div>
-                  <p className="opacity-70 text-sm line-clamp-3">{desc}</p>
-                  <div className={`mt-6 w-full py-2 text-center text-sm font-bold transition-colors ${
-                    isPromo ? "bg-pink-600 text-white" : "bg-zinc-100 text-zinc-600 group-hover:bg-zinc-900 group-hover:text-white"
-                  } ${btnRadius}`}>
-                    Reservar Turno
+                );
+              })}
+            </div>
+          ) : (
+            // ── Grid original sin grupos ──
+            <div className="grid lg:grid-cols-3 gap-8">
+              {allServices.map((service: any, i: number) => {
+                let isPromo = service.isPromo && service.promoEndDate;
+                if (isPromo && new Date(service.promoEndDate + "T23:59:59") < new Date()) isPromo = false;
+                const titulo    = service.name    || service.titulo;
+                const precio    = service.price   || service.precio;
+                const desc      = service.description || service.desc;
+                const duracion  = Number(service.duration || service.duracion || 60);
+                const imagenUrl = service.image   || service.imagenUrl;
+
+                return (
+                  <div key={service.id || i}
+                    onClick={() => { toggleSvc(service); setBookingStep(1); setIsModalOpen(true); }}
+                    className={`relative p-8 transition-all duration-300 group cursor-pointer overflow-hidden ${cardRadius} ${
+                      isPromo
+                        ? "bg-gradient-to-br from-pink-50 to-white border-2 border-pink-200 shadow-lg shadow-pink-100 hover:-translate-y-2"
+                        : "border border-zinc-500/10 shadow-sm hover:shadow-xl hover:-translate-y-2"
+                    }`}
+                    style={{ backgroundColor: isPromo ? undefined : "rgba(255,255,255,0.05)" }}
+                  >
+                    {isPromo && (
+                      <div className="absolute top-4 right-4 bg-pink-600 text-black text-[10px] font-bold px-3 py-1 rounded-full z-10 flex items-center gap-1">
+                        <Tag size={10} /> Oferta
+                      </div>
+                    )}
+                    {imagenUrl ? (
+                      <div className={`w-full h-48 mb-6 overflow-hidden shadow-md ${inputRadius}`}>
+                        <img src={imagenUrl} alt={titulo} className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500" />
+                      </div>
+                    ) : (
+                      <div className={`w-14 h-14 mb-6 text-black flex items-center justify-center shadow-lg ${inputRadius}`}
+                        style={{ backgroundColor: isPromo ? "#db2777" : brandColor }}>
+                        {isPromo ? <Tag size={28} /> : <CheckCircle size={28} />}
+                      </div>
+                    )}
+                    <h3 className="font-bold text-xl mb-3">{titulo}</h3>
+                    {precio != null && precio !== "" && Number(precio) !== 0 && (
+                      <p className="opacity-70 mb-4 font-medium">
+                        {fmtPrecio(precio, service.precioTipo)}
+                      </p>
+                    )}
+                    {isPromo && (
+                      <div className="mb-4 text-xs font-bold text-pink-600 bg-pink-100/50 p-2 rounded-lg text-center border border-pink-100">
+                        🔥 Válido hasta el {new Date(service.promoEndDate).toLocaleDateString("es-AR", { day: "numeric", month: "short" })}
+                      </div>
+                    )}
+                    <div className="flex items-center gap-2 text-xs font-bold text-zinc-400 mb-2">
+                      <Clock size={12} /><span>{formatDuration(duracion)}</span>
+                    </div>
+                    <p className="opacity-70 text-sm line-clamp-3">{desc}</p>
+                    <div className={`mt-6 w-full py-2 text-center text-sm font-bold transition-colors ${
+                      isPromo ? "bg-pink-600 text-white" : "bg-zinc-100 text-zinc-600 group-hover:bg-zinc-900 group-hover:text-white"
+                    } ${btnRadius}`}>
+                      Reservar Turno
+                    </div>
                   </div>
-                </div>
-              );
-            })}
-          </div>
+                );
+              })}
+            </div>
+          )}
         </div>
       </section>
 
-      {/* ── Sección Equipo ───────────────────────────────────────────────── */}
-      {(cfg.equipo as any)?.mostrar && equipo.length > 0 && (
-        <section id="equipo" className="py-24 px-6 bg-zinc-50 border-t border-zinc-200">
-          <div className="max-w-7xl mx-auto text-center mb-12">
-            <h2 className="text-3xl font-bold mt-2 mb-4 text-zinc-900">{(cfg.equipo as any).titulo}</h2>
-          </div>
-          <div className="max-w-7xl mx-auto flex flex-wrap justify-center gap-8">
-            {equipo.map((item: any, i: number) => (
-              <div key={i} className={`w-full sm:w-[calc(50%-2rem)] md:w-[280px] flex flex-col items-center text-center p-6 bg-white shadow-sm border border-zinc-100 hover:shadow-lg hover:-translate-y-1 transition-all ${cardRadius}`}>
-                <div className="w-24 h-24 rounded-full overflow-hidden mb-4 bg-zinc-100 border-2 border-white shadow-md">
-                  {item.imagenUrl || item.photoUrl ? (
-                    <img src={item.imagenUrl || item.photoUrl} className="w-full h-full object-cover" alt={item.nombre} />
-                  ) : (
-                    <Users className="w-full h-full p-6 text-zinc-300" />
-                  )}
-                </div>
-                <h3 className="font-bold text-lg text-zinc-900">{item.nombre}</h3>
-                <p className="text-zinc-500">{item.cargo || item.role}</p>
-              </div>
-            ))}
-          </div>
-        </section>
-      )}
+      
 
       {/* ── Modal de Reserva ─────────────────────────────────────────────── */}
       {isModalOpen && (
@@ -444,7 +549,7 @@ export default function CalendarSection({ negocio, config: blockConfig }: BlockS
                         ))}
                         <div className="w-full flex justify-between items-center text-xs text-zinc-500 pt-1 border-t border-zinc-200 mt-1">
                           <span className="flex items-center gap-1"><Clock size={11} /> {formatDuration(totalDuration)}</span>
-                          {totalPrice > 0 && <span className="font-bold">${totalPrice} total</span>}
+                          {totalPrice > 0 && <span className="font-bold">{new Intl.NumberFormat("es-AR").format(totalPrice)} total</span>}
                         </div>
                       </div>
                     )}
@@ -471,8 +576,8 @@ export default function CalendarSection({ negocio, config: blockConfig }: BlockS
                             </div>
                             <div className="flex items-center gap-2 shrink-0">
                               {precio != null && precio !== "" && Number(precio) !== 0 && (
-                                <span className={`font-bold text-sm px-2 py-0.5 rounded-lg ${selected ? "bg-white/20 text-white" : "bg-zinc-100 text-zinc-900"}`}>
-                                  ${precio}
+                                <span className={`font-bold text-sm px-2 py-0.5 rounded-lg ...`}>
+                                  {fmtPrecio(precio, item.precioTipo)}
                                 </span>
                               )}
                               <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center shrink-0 ${selected ? "border-white bg-white" : "border-zinc-300"}`}>
