@@ -37,6 +37,7 @@ const AnalyticsAdmin     = dynamic(() => import('@/blocks/analytics/admin/Analyt
 const MarketingAdmin     = dynamic(() => import('@/blocks/marketing/admin/MarketingAdmin'));
 const ShopAdmin          = dynamic(() => import('@/blocks/shop/admin/ShopAdmin'));
 const AcademyAdmin       = dynamic(() => import('@/blocks/academy/admin/AcademyAdmin'));
+const ChatbotAdmin       = dynamic(() => import('@/blocks/chatbot/admin/ChatbotAdmin'));
 
 // ── EditorPanels (ModularEditor) ──────────────────────────────────────────────
 const LandingPanel  = dynamic(() => import('@/blocks/landing/editor/LandingPanel'));
@@ -209,6 +210,15 @@ export const BLOCKS_REGISTRY: Record<BlockId, BlockDefinition> = {
     AdminComponent:   AcademyAdmin,
     editorLabel: 'Academia & Cursos',
     EditorPanel: AcademyPanel,
+  },
+  chatbot: {
+    id: 'chatbot', name: 'Chatbot WhatsApp',
+    description: 'Asistente de IA que atiende por WhatsApp, agenda turnos y responde consultas automáticamente.',
+    category: 'services', priceARS: 3000, agencyPriceARS: 2100, priceUC: 30, agencyPriceUC: 21,
+    dependencies: ['calendar'],
+    icon: 'Bot', available: true,
+    adminOrder: 13,
+    AdminComponent: ChatbotAdmin,
   },
 };
 // ─── Helpers del registry ─────────────────────────────────────────────────────
