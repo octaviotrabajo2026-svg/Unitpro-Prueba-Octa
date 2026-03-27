@@ -21,4 +21,5 @@ export const BLOCK_PRICES: Record<BlockId, { priceARS: number; agencyPriceARS: n
   chat:          { name: 'Chat',               priceARS: 0, agencyPriceARS: 0, priceUC: 0, agencyPriceUC: 0 },
   shop:          { name: 'Tienda Online',      priceARS: 0, agencyPriceARS: 0, priceUC: 0, agencyPriceUC: 0 },
   academy:       { name: 'Academia',           priceARS: 0, agencyPriceARS: 0, priceUC: 0, agencyPriceUC: 0 },
+  chatbot:       { name: 'Chatbot WhatsApp',  priceARS: 3000, agencyPriceARS: 2100, priceUC: 30, agencyPriceUC: 21 },
 };

@@ -21,7 +21,8 @@
       "mcp__ide__getDiagnostics",
       "Bash(npx tsc:*)",
       "Bash(npm run:*)",
-      "Bash(npm install:*)"
+      "Bash(npm install:*)",
+      "Bash(echo \"Exit code: $?\")"
     ]
   },
   "enabledPlugins": {

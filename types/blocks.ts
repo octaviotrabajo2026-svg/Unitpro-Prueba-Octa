@@ -49,7 +49,7 @@ export type BlockId =
   | 'landing' | 'about'
   | 'calendar' |'equipo' | 'crm' | 'gallery' | 'reviews'
   | 'analytics' | 'marketing' | 'payments' | 'chat'
-  | 'shop' | 'academy';
+  | 'shop' | 'academy' | 'chatbot';
 
 export type BlockCategory = 'platform' | 'core' | 'services' | 'commerce' | 'marketing' | 'future';
 
