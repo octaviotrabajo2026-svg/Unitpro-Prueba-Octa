@@ -31,7 +31,7 @@ function getSupabaseAdmin() {
 
 /**
  * Extrae el negocio_id desde el instance name de Evolution API.
- * Formato esperado: negocio_{id}
+ * Formato esperado: negocio_[id]
  */
 export function resolveNegocioFromInstance(instanceName: string): string | null {
   const match = instanceName.match(/^negocio_(.+)$/);
