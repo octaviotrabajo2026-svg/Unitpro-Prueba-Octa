@@ -1,5 +1,3 @@
-'use server';
-
 // lib/whatsapp-bot.ts
 // Motor del chatbot de WhatsApp. Usa Claude con tool use para agendar turnos,
 // consultar disponibilidad y cancelar citas en nombre del negocio.
