@@ -76,7 +76,7 @@ export default function ChatbotAdmin({ negocio }: BlockAdminProps) {
       const instanceName =
         configWeb.chatbot?.instanceName || `negocio_${negocio.id}`;
 
-      const res = await fetch('/api/whatsapp/setup-chatbot', {
+      const res = await fetch('/api/Whatsapp/setup-chatbot', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -88,6 +88,9 @@ export default function ChatbotAdmin({ negocio }: BlockAdminProps) {
 
       if (res.ok) {
         setEnabled(!enabled);
+      } else {
+        const body = await res.text();
+        console.error('[CHATBOT-ADMIN] Error del servidor:', res.status, body);
       }
     } catch (e) {
       console.error('[CHATBOT-ADMIN] Error toggling chatbot:', e);

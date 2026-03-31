@@ -29,16 +29,14 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Negocio no encontrado' }, { status: 404 });
     }
 
-    const evolutionUrl = process.env.EVOLUTION_API_URL;
-    const evolutionKey = process.env.EVOLUTION_API_KEY;
-    const appUrl = process.env.NEXT_PUBLIC_APP_URL || process.env.NEXTAUTH_URL;
+    const evolutionUrl = process.env.EVOLUTION_API_URL || 'http://178.104.109.245:8080';
+    const evolutionKey = process.env.EVOLUTION_API_KEY || '';
+    const appUrl =
+      process.env.NEXT_PUBLIC_APP_URL ||
+      process.env.NEXTAUTH_URL ||
+      'https://unitpro-prueba-octaclaude.vercel.app';
 
-    if (!evolutionUrl || !evolutionKey) {
-      return NextResponse.json(
-        { error: 'Evolution API no configurada' },
-        { status: 500 }
-      );
-    }
+    console.log('[SETUP-CHATBOT] evolutionUrl:', evolutionUrl, '| appUrl:', appUrl, '| instanceName:', instanceName, '| enabled:', enabled);
 
     if (enabled && instanceName) {
       // Registrar webhook en Evolution API para recibir mensajes

@@ -230,7 +230,7 @@ export const BLOCKS_REGISTRY: Record<BlockId, BlockDefinition> = {
     category: 'services',
     priceARS: 3000, agencyPriceARS: 2100, priceUC: 30, agencyPriceUC: 21,
     dependencies: ['calendar'],
-    icon: 'Bot',
+    icon: 'MessageCircle',
     available: true,
     adminOrder: 13,
     AdminComponent: ChatbotAdmin,
