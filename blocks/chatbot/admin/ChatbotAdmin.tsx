@@ -101,7 +101,7 @@ export default function ChatbotAdmin({ negocio }: BlockAdminProps) {
 
   const configWeb = negocio.config_web || {};
   const hasWhatsApp = !!(
-    configWeb.contacto?.whatsapp || configWeb.chatbot?.instanceName
+    negocio.whatsapp_access_token || configWeb.contacto?.whatsapp || configWeb.chatbot?.instanceName
   );
 
   return (
