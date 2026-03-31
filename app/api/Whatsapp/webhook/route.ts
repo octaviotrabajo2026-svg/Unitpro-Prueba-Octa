@@ -19,6 +19,7 @@ function cleanupProcessed() {
 }
 
 export async function POST(request: NextRequest) {
+  console.log('[WEBHOOK] Mensaje recibido');
   try {
     const body: EvolutionWebhookPayload = await request.json();
 

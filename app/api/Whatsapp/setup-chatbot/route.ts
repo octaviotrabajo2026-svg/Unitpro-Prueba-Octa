@@ -48,7 +48,7 @@ export async function POST(request: NextRequest) {
             'apikey': evolutionKey,
           },
           body: JSON.stringify({
-            url: `${appUrl}/api/whatsapp/webhook`,
+            url: `${appUrl}/api/Whatsapp/webhook`,
             webhook_by_events: true,
             webhook_base64: false,
             events: ['messages.upsert'],
