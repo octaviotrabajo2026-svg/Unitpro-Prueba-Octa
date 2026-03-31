@@ -3,7 +3,7 @@
 // Siempre responde 200 para que Evolution API no reintente.
 
 import { NextRequest, NextResponse } from 'next/server';
-import { handleWhatsAppMessage, resolveNegocioFromInstance } from '@/lib/whatsapp-bot';
+import { handleWhatsAppMessage, resolveNegocioFromInstance, verifyAccess } from '@/lib/whatsapp-bot';
 import { sendWhatsApp } from '@/lib/notifications/channels/whatsapp';
 import type { EvolutionWebhookPayload, EvolutionMessageData } from '@/types/whatsapp-bot';
 
@@ -77,7 +77,13 @@ export async function POST(request: NextRequest) {
     if (!negocioId) {
       return NextResponse.json({ ok: true });
     }
-
+// --- NUEVO BLOQUE DE SEGURIDAD ---
+const { allowed } = await verifyAccess(negocioId);
+if (!allowed) {
+  console.log(`[WEBHOOK] Bot desactivado para el negocio ${negocioId}. Ignorando mensaje.`);
+  return NextResponse.json({ ok: true });
+}
+// ---------------------------------
     // Si no es un mensaje de texto, pedir que escriban
     if (!text) {
       await sendWhatsApp({
@@ -90,11 +96,14 @@ export async function POST(request: NextRequest) {
 
     // Procesar mensaje con el bot y enviar respuesta
     const response = await handleWhatsAppMessage(negocioId, phone, text);
-    await sendWhatsApp({
-      to: phone,
-      text: response,
-      instanceName: body.instance,
-    });
+// Solo enviamos el mensaje si hay una respuesta válida
+    if (response && !response.includes('no está disponible')) {
+      await sendWhatsApp({
+        to: phone,
+        text: response,
+        instanceName: body.instance,
+      });
+    }
 
     return NextResponse.json({ ok: true });
   } catch (error) {

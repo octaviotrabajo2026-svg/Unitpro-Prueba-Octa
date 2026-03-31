@@ -40,7 +40,7 @@ export function resolveNegocioFromInstance(instanceName: string): string | null 
  * Verifica que el bloque chatbot esté activo para el negocio y
  * que el chatbot esté habilitado en config_web.
  */
-async function verifyAccess(
+export async function verifyAccess(
   negocioId: string
 ): Promise<{ allowed: boolean; configWeb?: any; negocio?: any }> {
   const supabase = getSupabaseAdmin();
@@ -48,7 +48,7 @@ async function verifyAccess(
   const { data: block } = await supabase
     .from('tenant_blocks')
     .select('active')
-    .eq('negocio_id', negocioId)
+    .eq('negocio_id', Number(negocioId))
     .eq('block_id', 'chatbot')
     .single();
 
@@ -57,7 +57,7 @@ async function verifyAccess(
   const { data: negocio } = await supabase
     .from('negocios')
     .select('*, config_web')
-    .eq('id', negocioId)
+    .eq('id', Number(negocioId))
     .single();
 
   if (!negocio) return { allowed: false };
@@ -82,7 +82,7 @@ async function getOrCreateConversation(
   const { data: existing } = await supabase
     .from('whatsapp_conversations')
     .select('*')
-    .eq('negocio_id', negocioId)
+    .eq('negocio_id', Number(negocioId))
     .eq('phone', phone)
     .gte('last_activity', cutoff)
     .order('last_activity', { ascending: false })
@@ -94,7 +94,7 @@ async function getOrCreateConversation(
   const { data: created } = await supabase
     .from('whatsapp_conversations')
     .insert({
-      negocio_id: negocioId,
+      negocio_id: Number(negocioId),
       phone,
       messages: [],
       booking_draft: {},
@@ -103,6 +103,10 @@ async function getOrCreateConversation(
     })
     .select()
     .single();
+
+  if (!created) {
+    throw new Error(`[WHATSAPP-BOT] getOrCreateConversation: insert returned null for negocio_id=${negocioId}, phone=${phone}`);
+  }
 
   return created as WhatsappConversation;
 }
@@ -420,7 +424,7 @@ async function executeTool(
         const { data: turno } = await supabase
           .from('turnos')
           .select('*')
-          .eq('negocio_id', negocioId)
+          .eq('negocio_id', Number(negocioId))
           .eq('cliente_telefono', telefono)
           .in('estado', ['confirmado', 'pendiente'])
           .gte('start', now)
@@ -470,7 +474,7 @@ async function executeTool(
         const { data: turno } = await supabase
           .from('turnos')
           .select('*')
-          .eq('negocio_id', negocioId)
+          .eq('negocio_id', Number(negocioId))
           .eq('cliente_telefono', telefono)
           .eq('estado', 'confirmado')
           .gte('start', now)
@@ -514,14 +518,21 @@ export async function handleWhatsAppMessage(
   phone: string,
   userMessage: string
 ): Promise<string> {
+  try {
   // 1. Verificar que el bloque esté activo y el chatbot habilitado
   const { allowed, configWeb, negocio } = await verifyAccess(negocioId);
+  console.log('[WHATSAPP-BOT] verifyAccess result:', { allowed, negocioId });
   if (!allowed) {
     return 'Lo siento, el servicio de chatbot no está disponible en este momento.';
   }
 
   // 2. Obtener o crear conversación (sesión de 2hs)
   const conversation = await getOrCreateConversation(negocioId, phone);
+  console.log('[WHATSAPP-BOT] conversation:', conversation?.id, 'messages count:', conversation?.messages?.length);
+
+  if (!conversation) {
+    throw new Error('[WHATSAPP-BOT] conversation is null after getOrCreateConversation');
+  }
 
   // 3. Agregar mensaje del usuario al historial
   const newUserMessage: ConversationMessage = {
@@ -618,4 +629,8 @@ export async function handleWhatsAppMessage(
   await updateConversation(conversation.id, { messages: finalMessages });
 
   return finalResponse;
+  } catch (error) {
+    console.error('[WHATSAPP-BOT] handleWhatsAppMessage crashed:', error);
+    throw error;
+  }
 }
