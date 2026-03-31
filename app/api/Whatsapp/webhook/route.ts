@@ -5,7 +5,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { handleWhatsAppMessage, resolveNegocioFromInstance } from '@/lib/whatsapp-bot';
 import { sendWhatsApp } from '@/lib/notifications/channels/whatsapp';
-import type { EvolutionWebhookPayload } from '@/types/whatsapp-bot';
+import type { EvolutionWebhookPayload, EvolutionMessageData } from '@/types/whatsapp-bot';
 
 // Dedup en memoria: evita procesar el mismo message.id dos veces (TTL 60s)
 const processedMessages = new Map<string, number>();
@@ -22,41 +22,48 @@ export async function POST(request: NextRequest) {
   console.log('[WEBHOOK] Mensaje recibido');
   try {
     const body: EvolutionWebhookPayload = await request.json();
+    console.log('[WEBHOOK] Payload:', JSON.stringify(body, null, 2));
 
-    // Solo procesar eventos de mensajes entrantes
-    if (body.event !== 'messages.upsert') {
+    // Aceptar tanto el formato v1 (messages.upsert) como v2 (MESSAGES_UPSERT)
+    if (body.event !== 'messages.upsert' && body.event !== 'MESSAGES_UPSERT') {
       return NextResponse.json({ ok: true });
     }
 
-    const data = body.data;
+    // Compatibilidad v1/v2: v2 envuelve el mensaje en data.messages[0]
+    const msgData: EvolutionMessageData | undefined =
+      (body.data as any)?.messages?.[0] ?? (body.data as EvolutionMessageData);
+
+    if (!msgData?.key) {
+      return NextResponse.json({ ok: true });
+    }
 
     // Ignorar mensajes enviados por el bot mismo
-    if (data.key.fromMe) {
+    if (msgData?.key?.fromMe) {
       return NextResponse.json({ ok: true });
     }
 
     // Ignorar mensajes de grupos (JID de grupos termina en @g.us)
-    if (data.key.remoteJid.endsWith('@g.us')) {
+    if (msgData?.key?.remoteJid?.endsWith('@g.us')) {
       return NextResponse.json({ ok: true });
     }
 
     // Dedup: descartar mensajes ya procesados
-    const messageId = data.key.id;
+    const messageId = msgData?.key?.id;
     cleanupProcessed();
-    if (processedMessages.has(messageId)) {
+    if (messageId && processedMessages.has(messageId)) {
       return NextResponse.json({ ok: true });
     }
-    processedMessages.set(messageId, Date.now());
+    if (messageId) processedMessages.set(messageId, Date.now());
 
     // Extraer texto del mensaje (soporta texto plano y texto extendido)
     const text =
-      data.message?.conversation ||
-      data.message?.extendedTextMessage?.text;
+      msgData?.message?.conversation ||
+      msgData?.message?.extendedTextMessage?.text;
 
     // Extraer número limpio (sin sufijo de WhatsApp)
-    const phone = data.key.remoteJid
-      .replace('@s.whatsapp.net', '')
-      .replace('@c.us', '');
+    const phone = msgData?.key?.remoteJid
+      ?.replace('@s.whatsapp.net', '')
+      ?.replace('@c.us', '') ?? '';
 
     // Resolver negocio desde el instance name (formato: negocio_<id>)
     const negocioId = resolveNegocioFromInstance(body.instance);

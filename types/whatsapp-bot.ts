@@ -62,5 +62,6 @@ export interface EvolutionMessageData {
 export interface EvolutionWebhookPayload {
   event: string;
   instance: string;
-  data: EvolutionMessageData;
+  // v1: data is the message directly; v2: data wraps messages in an array
+  data: EvolutionMessageData | { messages: EvolutionMessageData[] };
 }
