@@ -33,7 +33,7 @@ function getSupabaseAdmin() {
  */
 export function resolveNegocioFromInstance(instanceName: string): string | null {
   const match = instanceName.match(/^negocio_(.+)$/);
-  return match ? match[1] : null;
+  return match ? String(parseInt(match[1], 10)) : null;
 }
 
 /**
@@ -75,7 +75,7 @@ export async function verifyAccess(
 async function getOrCreateConversation(
   negocioId: string,
   phone: string
-): Promise<WhatsappConversation> {
+): Promise<WhatsappConversation | null> {
   const supabase = getSupabaseAdmin();
   const cutoff = new Date(Date.now() - SESSION_DURATION_MS).toISOString();
 
@@ -105,7 +105,8 @@ async function getOrCreateConversation(
     .single();
 
   if (!created) {
-    throw new Error(`[WHATSAPP-BOT] getOrCreateConversation: insert returned null for negocio_id=${negocioId}, phone=${phone}`);
+    console.error(`[WHATSAPP-BOT] getOrCreateConversation: insert returned null for negocio_id=${negocioId}, phone=${phone}`);
+    return null;
   }
 
   return created as WhatsappConversation;
@@ -531,7 +532,8 @@ export async function handleWhatsAppMessage(
   console.log('[WHATSAPP-BOT] conversation:', conversation?.id, 'messages count:', conversation?.messages?.length);
 
   if (!conversation) {
-    throw new Error('[WHATSAPP-BOT] conversation is null after getOrCreateConversation');
+    console.error('[WHATSAPP-BOT] conversation is null after getOrCreateConversation');
+    return 'Lo siento, no pudimos iniciar la conversación en este momento. Por favor, intentá de nuevo.';
   }
 
   // 3. Agregar mensaje del usuario al historial
