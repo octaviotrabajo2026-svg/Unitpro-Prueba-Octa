@@ -22,16 +22,23 @@ export async function POST(request: NextRequest) {
   console.log('[WEBHOOK] Mensaje recibido');
   try {
     const body: EvolutionWebhookPayload = await request.json();
+    console.log('[WEBHOOK RAW]', JSON.stringify(body));
     console.log('[WEBHOOK] Payload:', JSON.stringify(body, null, 2));
 
-    // Aceptar tanto el formato v1 (messages.upsert) como v2 (MESSAGES_UPSERT)
-    if (body.event !== 'messages.upsert' && body.event !== 'MESSAGES_UPSERT') {
+    // Aceptar tanto el formato v1 (messages.upsert) como v2 (MESSAGES_UPSERT), case-insensitive
+    const eventName = body.event?.toLowerCase();
+    if (eventName !== 'messages.upsert') {
       return NextResponse.json({ ok: true });
     }
 
-    // Compatibilidad v1/v2: v2 envuelve el mensaje en data.messages[0]
+    // Compatibilidad v1/v2:
+    // - v2: data es un array de mensajes → data[0]
+    // - v1 variante: data.messages[0]
+    // - v1 directo: data es el objeto mensaje
     const msgData: EvolutionMessageData | undefined =
-      (body.data as any)?.messages?.[0] ?? (body.data as EvolutionMessageData);
+      Array.isArray(body.data)
+        ? (body.data as EvolutionMessageData[])[0]
+        : (body.data as any)?.messages?.[0] ?? (body.data as EvolutionMessageData);
 
     if (!msgData?.key) {
       return NextResponse.json({ ok: true });
