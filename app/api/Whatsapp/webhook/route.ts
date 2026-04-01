@@ -1,114 +1,49 @@
-// app/api/whatsapp/webhook/route.ts
-// Webhook receptor de Evolution API para el chatbot de WhatsApp.
-// Siempre responde 200 para que Evolution API no reintente.
-
-import { NextRequest, NextResponse } from 'next/server';
+// app/api/Whatsapp/webhook/route.ts
+import { NextResponse } from 'next/server';
 import { handleWhatsAppMessage, resolveNegocioFromInstance, verifyAccess } from '@/lib/whatsapp-bot';
 import { sendWhatsApp } from '@/lib/notifications/channels/whatsapp';
-import type { EvolutionWebhookPayload, EvolutionMessageData } from '@/types/whatsapp-bot';
 
-// Dedup en memoria: evita procesar el mismo message.id dos veces (TTL 60s)
-const processedMessages = new Map<string, number>();
+const seen = new Set<string>();
+function dup(id: string): boolean { if (seen.has(id)) return true; seen.add(id); setTimeout(() => seen.delete(id), 60000); return false; }
 
-/** Limpia entradas de dedup con más de 60 segundos de antigüedad. */
-function cleanupProcessed() {
-  const now = Date.now();
-  for (const [id, ts] of processedMessages.entries()) {
-    if (now - ts > 60_000) processedMessages.delete(id);
-  }
-}
-
-export async function POST(request: NextRequest) {
-  console.log('[WEBHOOK] Mensaje recibido');
+export async function POST(request: Request) {
   try {
-    const body: EvolutionWebhookPayload = await request.json();
-    console.log('[WEBHOOK RAW]', JSON.stringify(body));
-    console.log('[WEBHOOK] Payload:', JSON.stringify(body, null, 2));
+    const body = await request.json();
+    const evt = (body.event || '').toLowerCase();
+    if (evt !== 'messages.upsert') return NextResponse.json({ ok: true });
 
-    // Aceptar tanto el formato v1 (messages.upsert) como v2 (MESSAGES_UPSERT), case-insensitive
-    const eventName = body.event?.toLowerCase();
-    if (eventName !== 'messages.upsert') {
+    const data = Array.isArray(body.data) ? body.data[0] : body.data;
+    if (!data?.key) return NextResponse.json({ ok: true });
+    if (data.key.fromMe) return NextResponse.json({ ok: true });
+    const jid = data.key.remoteJid || '';
+    if (jid.endsWith('@g.us')) return NextResponse.json({ ok: true });
+    if (data.key.id && dup(data.key.id)) return NextResponse.json({ ok: true });
+
+    const phone = jid.replace('@s.whatsapp.net', '');
+    const instance = body.instance;
+    const negocioId = resolveNegocioFromInstance(instance);
+    if (!negocioId) return NextResponse.json({ ok: true });
+
+    const { allowed } = await verifyAccess(negocioId);
+    if (!allowed) {
+      console.log(`[WEBHOOK] Bot desactivado para negocio ${negocioId}`);
       return NextResponse.json({ ok: true });
     }
 
-    // Compatibilidad v1/v2:
-    // - v2: data es un array de mensajes → data[0]
-    // - v1 variante: data.messages[0]
-    // - v1 directo: data es el objeto mensaje
-    const msgData: EvolutionMessageData | undefined =
-      Array.isArray(body.data)
-        ? (body.data as EvolutionMessageData[])[0]
-        : (body.data as any)?.messages?.[0] ?? (body.data as EvolutionMessageData);
+    const text = data.message?.conversation || data.message?.extendedTextMessage?.text || null;
+    if (!text) return NextResponse.json({ ok: true });
 
-    if (!msgData?.key) {
-      return NextResponse.json({ ok: true });
-    }
+    console.log(`[WEBHOOK] ${phone} -> negocio ${negocioId}: "${text.substring(0, 50)}"`);
+    const reply = await handleWhatsAppMessage(negocioId, phone, text, data.pushName);
+    if (!reply) return NextResponse.json({ ok: true });
 
-    // Ignorar mensajes enviados por el bot mismo
-    if (msgData?.key?.fromMe) {
-      return NextResponse.json({ ok: true });
-    }
-
-    // Ignorar mensajes de grupos (JID de grupos termina en @g.us)
-    if (msgData?.key?.remoteJid?.endsWith('@g.us')) {
-      return NextResponse.json({ ok: true });
-    }
-
-    // Dedup: descartar mensajes ya procesados
-    const messageId = msgData?.key?.id;
-    cleanupProcessed();
-    if (messageId && processedMessages.has(messageId)) {
-      return NextResponse.json({ ok: true });
-    }
-    if (messageId) processedMessages.set(messageId, Date.now());
-
-    // Extraer texto del mensaje (soporta texto plano y texto extendido)
-    const text =
-      msgData?.message?.conversation ||
-      msgData?.message?.extendedTextMessage?.text;
-
-    // Extraer número limpio (sin sufijo de WhatsApp)
-    const phone = msgData?.key?.remoteJid
-      ?.replace('@s.whatsapp.net', '')
-      ?.replace('@c.us', '') ?? '';
-
-    // Resolver negocio desde el instance name (formato: negocio_<id>)
-    const negocioId = resolveNegocioFromInstance(body.instance);
-    if (!negocioId) {
-      return NextResponse.json({ ok: true });
-    }
-// --- NUEVO BLOQUE DE SEGURIDAD ---
-const { allowed } = await verifyAccess(negocioId);
-if (!allowed) {
-  console.log(`[WEBHOOK] Bot desactivado para el negocio ${negocioId}. Ignorando mensaje.`);
-  return NextResponse.json({ ok: true });
-}
-// ---------------------------------
-    // Si no es un mensaje de texto, pedir que escriban
-    if (!text) {
-      await sendWhatsApp({
-        to: phone,
-        text: 'Por favor, escribime tu consulta en texto para poder ayudarte 😊',
-        instanceName: body.instance,
-      });
-      return NextResponse.json({ ok: true });
-    }
-
-    // Procesar mensaje con el bot y enviar respuesta
-    const response = await handleWhatsAppMessage(negocioId, phone, text);
-// Solo enviamos el mensaje si hay una respuesta válida
-    if (response && !response.includes('no está disponible')) {
-      await sendWhatsApp({
-        to: phone,
-        text: response,
-        instanceName: body.instance,
-      });
-    }
-
-    return NextResponse.json({ ok: true });
-  } catch (error) {
-    console.error('[WHATSAPP-WEBHOOK] Error:', error);
-    // Siempre 200 para que Evolution API no reintente el webhook
+    await sendWhatsApp({ to: phone, text: reply, instanceName: instance });
+    console.log(`[WEBHOOK] Respuesta enviada a ${phone}`);
+    return NextResponse.json({ ok: true, replied: true });
+  } catch (e: any) {
+    console.error('[WEBHOOK] Error:', e?.message);
     return NextResponse.json({ ok: true });
   }
 }
+
+export async function GET() { return NextResponse.json({ status: 'active' }); }

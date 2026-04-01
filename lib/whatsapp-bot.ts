@@ -1,638 +1,154 @@
 // lib/whatsapp-bot.ts
-// Motor del chatbot de WhatsApp. Usa Claude con tool use para agendar turnos,
-// consultar disponibilidad y cancelar citas en nombre del negocio.
-
 import Anthropic from '@anthropic-ai/sdk';
 import { createClient } from '@supabase/supabase-js';
-import { checkAvailability, createAppointment, type CreateAppointmentPayload } from '@/blocks/calendar/actions';
 import { generateTimeSlots } from '@/lib/time-slots';
-import { sendWhatsApp } from '@/lib/notifications/channels/whatsapp';
-import type { WhatsappConversation, ConversationMessage } from '@/types/whatsapp-bot';
-
-// Re-exportar sendWhatsApp para que el webhook lo pueda importar junto con este módulo
-export { sendWhatsApp };
 
 const anthropic = new Anthropic();
 const MODEL = 'claude-sonnet-4-20250514';
 const MAX_TOKENS = 600;
-const MAX_ITERATIONS = 5;
-const SESSION_DURATION_MS = 2 * 60 * 60 * 1000; // 2 horas
-const MAX_MESSAGES = 20;
+const MAX_HISTORY = 20;
 
-/** Crea un cliente Supabase con service role para operaciones del servidor. */
-function getSupabaseAdmin() {
-  return createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!
-  );
+const supabaseAdmin = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
+
+interface ConvMessage { role: 'user' | 'assistant'; content: string; }
+
+export function resolveNegocioFromInstance(instanceName: string): number | null {
+  if (!instanceName) return null;
+  const match = instanceName.match(/^negocio_(\d+)$/);
+  if (!match) return null;
+  return parseInt(match[1], 10);
 }
 
-/**
- * Extrae el negocio_id desde el instance name de Evolution API.
- * Formato esperado: negocio_[id]
- */
-export function resolveNegocioFromInstance(instanceName: string): string | null {
-  const match = instanceName.match(/^negocio_(.+)$/);
-  return match ? String(parseInt(match[1], 10)) : null;
+export async function verifyAccess(negocioId: number): Promise<{ allowed: boolean }> {
+  try {
+    const { data: block } = await supabaseAdmin.from('tenant_blocks').select('active').eq('negocio_id', negocioId).eq('block_id', 'chatbot').eq('active', true).maybeSingle();
+    if (!block) return { allowed: false };
+    const { data: neg } = await supabaseAdmin.from('negocios').select('config_web').eq('id', negocioId).single();
+    if (!neg) return { allowed: false };
+    const enabled = (neg.config_web as any)?.chatbot?.enabled === true;
+    return { allowed: enabled };
+  } catch { return { allowed: false }; }
 }
-
-/**
- * Verifica que el bloque chatbot esté activo para el negocio y
- * que el chatbot esté habilitado en config_web.
- */
-export async function verifyAccess(
-  negocioId: string
-): Promise<{ allowed: boolean; configWeb?: any; negocio?: any }> {
-  const supabase = getSupabaseAdmin();
-
-  const { data: block } = await supabase
-    .from('tenant_blocks')
-    .select('active')
-    .eq('negocio_id', Number(negocioId))
-    .eq('block_id', 'chatbot')
-    .single();
-
-  if (!block?.active) return { allowed: false };
-
-  const { data: negocio } = await supabase
-    .from('negocios')
-    .select('*, config_web')
-    .eq('id', Number(negocioId))
-    .single();
-
-  if (!negocio) return { allowed: false };
-
-  const configWeb = negocio.config_web || {};
-  if (!configWeb.chatbot?.enabled) return { allowed: false };
-
-  return { allowed: true, configWeb, negocio };
-}
-
-/**
- * Obtiene una conversación activa existente (dentro de la ventana de 2hs)
- * o crea una nueva.
- */
-async function getOrCreateConversation(
-  negocioId: string,
-  phone: string
-): Promise<WhatsappConversation | null> {
-  const supabase = getSupabaseAdmin();
-  const cutoff = new Date(Date.now() - SESSION_DURATION_MS).toISOString();
-
-  const { data: existing } = await supabase
-    .from('whatsapp_conversations')
-    .select('*')
-    .eq('negocio_id', Number(negocioId))
-    .eq('phone', phone)
-    .gte('last_activity', cutoff)
-    .order('last_activity', { ascending: false })
-    .limit(1)
-    .single();
-
-  if (existing) return existing as WhatsappConversation;
-
-  const { data: created } = await supabase
-    .from('whatsapp_conversations')
-    .insert({
-      negocio_id: Number(negocioId),
-      phone,
-      messages: [],
-      booking_draft: {},
-      stage: 'greeting',
-      last_activity: new Date().toISOString(),
-    })
-    .select()
-    .single();
-
-  if (!created) {
-    console.error(`[WHATSAPP-BOT] getOrCreateConversation: insert returned null for negocio_id=${negocioId}, phone=${phone}`);
-    return null;
-  }
-
-  return created as WhatsappConversation;
-}
-
-/**
- * Persiste los cambios de una conversación en Supabase.
- * Limita el historial a MAX_MESSAGES para no crecer indefinidamente.
- */
-async function updateConversation(
-  id: string,
-  updates: Partial<WhatsappConversation>
-) {
-  const supabase = getSupabaseAdmin();
-
-  if (updates.messages && updates.messages.length > MAX_MESSAGES) {
-    updates.messages = updates.messages.slice(-MAX_MESSAGES);
-  }
-
-  await supabase
-    .from('whatsapp_conversations')
-    .update({ ...updates, last_activity: new Date().toISOString() })
-    .eq('id', id);
-}
-
-/**
- * Construye el system prompt dinámico con la info real del negocio.
- * El schedule usa claves numéricas (WeeklySchedule de web-config.ts).
- */
-function buildSystemPrompt(configWeb: any, negocio: any): string {
-  const now = new Date().toLocaleString('es-AR', {
-    timeZone: 'America/Argentina/Buenos_Aires',
-  });
-
-  const servicios = configWeb.servicios?.items || [];
-  const equipo = configWeb.equipo?.items || [];
-
-  const serviciosText =
-    servicios
-      .map((s: any) => `- ${s.titulo}: $${s.precio}, ${s.duracion} min`)
-      .join('\n') || 'No hay servicios configurados';
-
-  const equipoText =
-    equipo
-      .map((e: any) => `- ${e.nombre}${e.cargo ? ` (${e.cargo})` : ''}`)
-      .join('\n') || 'No hay equipo configurado';
-
-  // WeeklySchedule usa keys "0"..="6" (0=domingo) con isOpen + ranges
-  const schedule = configWeb.schedule || configWeb.calendar?.schedule || {};
-  const dayNames: Record<string, string> = {
-    '1': 'lunes', '2': 'martes', '3': 'miercoles',
-    '4': 'jueves', '5': 'viernes', '6': 'sabado', '0': 'domingo',
-  };
-  const horarioText =
-    Object.entries(dayNames)
-      .filter(([key]) => schedule[key]?.isOpen)
-      .map(([key, name]) => {
-        const ranges = schedule[key].ranges
-          ?.map((r: any) => `${r.start}-${r.end}`)
-          .join(', ');
-        return `${name}: ${ranges || 'horario a confirmar'}`;
-      })
-      .join('\n') || 'Consultar disponibilidad';
-
-  return `Sos el asistente virtual de ${negocio.nombre || 'este negocio'} en WhatsApp. Ayudás a agendar turnos, consultar disponibilidad y cancelar citas.
-
-Fecha y hora actual: ${now} (America/Argentina/Buenos_Aires)
-
-SERVICIOS DISPONIBLES:
-${serviciosText}
-
-EQUIPO:
-${equipoText}
-
-HORARIOS:
-${horarioText}
-
-REGLAS:
-- Hablá en español argentino, de forma amable y cercana
-- Usá emojis moderados (1-2 por mensaje)
-- Siempre usá las tools disponibles para obtener datos reales, no inventes información
-- Pedí el nombre completo y email para confirmar un turno
-- Si el usuario quiere cancelar, pedí el teléfono para buscar el turno
-- Confirmá siempre los detalles antes de crear un turno
-- Si no hay disponibilidad, ofrecé otros horarios o fechas
-- Respondé de forma concisa (máx 3-4 oraciones por mensaje)`;
-}
-
-// ─── Definición de las 6 tools para Claude ───────────────────────────────────
 
 const TOOLS: Anthropic.Tool[] = [
-  {
-    name: 'listar_servicios',
-    description: 'Lista los servicios disponibles del negocio con nombre, precio y duración',
-    input_schema: {
-      type: 'object' as const,
-      properties: {},
-      required: [],
-    },
-  },
-  {
-    name: 'listar_profesionales',
-    description: 'Lista los profesionales disponibles para un servicio específico',
-    input_schema: {
-      type: 'object' as const,
-      properties: {
-        servicio_nombre: { type: 'string', description: 'Nombre del servicio' },
-      },
-      required: ['servicio_nombre'],
-    },
-  },
-  {
-    name: 'consultar_disponibilidad',
-    description:
-      'Consulta los horarios disponibles para una fecha, servicio y profesional específicos',
-    input_schema: {
-      type: 'object' as const,
-      properties: {
-        fecha: { type: 'string', description: 'Fecha en formato YYYY-MM-DD' },
-        servicio_nombre: { type: 'string', description: 'Nombre del servicio' },
-        worker_id: { type: 'string', description: 'ID del profesional (opcional)' },
-      },
-      required: ['fecha', 'servicio_nombre'],
-    },
-  },
-  {
-    name: 'crear_turno',
-    description: 'Crea un turno/reserva con todos los datos del cliente',
-    input_schema: {
-      type: 'object' as const,
-      properties: {
-        servicio_nombre: { type: 'string' },
-        fecha: { type: 'string', description: 'YYYY-MM-DD' },
-        hora: { type: 'string', description: 'HH:mm' },
-        cliente_nombre: { type: 'string' },
-        cliente_apellido: { type: 'string' },
-        cliente_telefono: { type: 'string' },
-        cliente_email: { type: 'string' },
-        worker_id: { type: 'string', description: 'ID del profesional (opcional)' },
-        worker_nombre: { type: 'string', description: 'Nombre del profesional (opcional)' },
-      },
-      required: [
-        'servicio_nombre', 'fecha', 'hora',
-        'cliente_nombre', 'cliente_apellido', 'cliente_telefono',
-      ],
-    },
-  },
-  {
-    name: 'cancelar_turno',
-    description: 'Cancela el próximo turno del cliente por su número de teléfono',
-    input_schema: {
-      type: 'object' as const,
-      properties: {
-        telefono: { type: 'string', description: 'Número de teléfono del cliente' },
-      },
-      required: ['telefono'],
-    },
-  },
-  {
-    name: 'consultar_mi_turno',
-    description: 'Consulta el próximo turno confirmado del cliente por su teléfono',
-    input_schema: {
-      type: 'object' as const,
-      properties: {
-        telefono: { type: 'string', description: 'Número de teléfono del cliente' },
-      },
-      required: ['telefono'],
-    },
-  },
+  { name: 'listar_servicios', description: 'Lista servicios del negocio.', input_schema: { type: 'object' as const, properties: {}, required: [] } },
+  { name: 'listar_profesionales', description: 'Lista profesionales para un servicio.', input_schema: { type: 'object' as const, properties: { servicio: { type: 'string' } }, required: ['servicio'] } },
+  { name: 'consultar_disponibilidad', description: 'Horarios libres para una fecha.', input_schema: { type: 'object' as const, properties: { fecha: { type: 'string' }, servicio: { type: 'string' }, worker_id: { type: 'string' } }, required: ['fecha', 'servicio'] } },
+  { name: 'crear_turno', description: 'Crea turno con TODOS los datos.', input_schema: { type: 'object' as const, properties: { servicio: { type: 'string' }, worker_id: { type: 'string' }, worker_name: { type: 'string' }, fecha: { type: 'string' }, hora: { type: 'string' }, nombre_cliente: { type: 'string' }, email_cliente: { type: 'string' } }, required: ['servicio', 'fecha', 'hora', 'nombre_cliente', 'email_cliente'] } },
+  { name: 'cancelar_turno', description: 'Cancela turno del cliente.', input_schema: { type: 'object' as const, properties: {}, required: [] } },
+  { name: 'consultar_mi_turno', description: 'Proximo turno del cliente.', input_schema: { type: 'object' as const, properties: {}, required: [] } },
 ];
 
-// ─── Ejecución de tools ───────────────────────────────────────────────────────
+interface NegocioCtx { negocio: any; configWeb: any; servicios: any[]; equipo: any[]; schedule: any; slug: string; bookingConfig: any; }
 
-/**
- * Ejecuta una tool específica y devuelve el resultado como string.
- * Cada tool encapsula su propio manejo de errores para no interrumpir el loop.
- */
-async function executeTool(
-  toolName: string,
-  toolInput: Record<string, any>,
-  configWeb: any,
-  negocio: any,
-  negocioId: string
-): Promise<string> {
+async function loadCtx(id: number): Promise<NegocioCtx | null> {
   try {
-    const slug = negocio.slug;
-
-    switch (toolName) {
-      case 'listar_servicios': {
-        const items = configWeb.servicios?.items || [];
-        if (!items.length) return 'No hay servicios configurados.';
-        const lista = items
-          .map((s: any) => `- ${s.titulo}: $${s.precio}, ${s.duracion} minutos`)
-          .join('\n');
-        return `Servicios disponibles:\n${lista}`;
-      }
-
-      case 'listar_profesionales': {
-        const servicioNombre = toolInput.servicio_nombre as string;
-        const servicios = configWeb.servicios?.items || [];
-        const servicio = servicios.find((s: any) =>
-          s.titulo.toLowerCase().includes(servicioNombre.toLowerCase())
-        );
-        if (!servicio) return `No encontré el servicio "${servicioNombre}".`;
-
-        const equipo = configWeb.equipo?.items || [];
-        const workerIds: string[] = servicio.workerIds || [];
-
-        if (!workerIds.length) {
-          if (!equipo.length) return 'No hay profesionales asignados.';
-          const lista = equipo.map((e: any) => `- ${e.nombre} (ID: ${e.id})`).join('\n');
-          return `Profesionales disponibles para ${servicio.titulo}:\n${lista}`;
-        }
-
-        const asignados = equipo.filter((e: any) => workerIds.includes(e.id));
-        if (!asignados.length) return 'No hay profesionales asignados a este servicio.';
-        const lista = asignados.map((e: any) => `- ${e.nombre} (ID: ${e.id})`).join('\n');
-        return `Profesionales para ${servicio.titulo}:\n${lista}`;
-      }
-
-      case 'consultar_disponibilidad': {
-        const { fecha, servicio_nombre, worker_id } = toolInput as {
-          fecha: string;
-          servicio_nombre: string;
-          worker_id?: string;
-        };
-
-        const servicios = configWeb.servicios?.items || [];
-        const servicio = servicios.find((s: any) =>
-          s.titulo.toLowerCase().includes(servicio_nombre.toLowerCase())
-        );
-        if (!servicio) return `No encontré el servicio "${servicio_nombre}".`;
-
-        const result = await checkAvailability(slug, fecha, worker_id);
-        if (!result.success) return `Error al consultar disponibilidad: ${result.error}`;
-
-        // El schedule global se guarda en config_web.schedule (WeeklySchedule)
-        const schedule = configWeb.schedule || configWeb.calendar?.schedule;
-        if (!schedule) return 'No hay horarios configurados para este negocio.';
-
-        // Obtener schedule específico del profesional si corresponde
-        let workerSchedule;
-        if (worker_id) {
-          const equipo = configWeb.equipo?.items || [];
-          const worker = equipo.find((e: any) => e.id === worker_id);
-          workerSchedule = worker?.schedule;
-        }
-
-        const slots = generateTimeSlots({
-          date: fecha,
-          serviceDuration: servicio.duracion || 60,
-          schedule,
-          busySlots: result.busy,
-          intervalStep: 30,
-          workerSchedule,
-        });
-
-        const disponibles = slots.filter((s) => s.available).map((s) => s.time);
-        if (!disponibles.length) return `No hay turnos disponibles para el ${fecha}.`;
-
-        return `Horarios disponibles para ${servicio.titulo} el ${fecha}:\n${disponibles.join(', ')}`;
-      }
-
-      case 'crear_turno': {
-        const {
-          servicio_nombre, fecha, hora,
-          cliente_nombre, cliente_apellido, cliente_telefono, cliente_email,
-          worker_id, worker_nombre,
-        } = toolInput as {
-          servicio_nombre: string; fecha: string; hora: string;
-          cliente_nombre: string; cliente_apellido: string;
-          cliente_telefono: string; cliente_email?: string;
-          worker_id?: string; worker_nombre?: string;
-        };
-
-        const servicios = configWeb.servicios?.items || [];
-        const servicio = servicios.find((s: any) =>
-          s.titulo.toLowerCase().includes(servicio_nombre.toLowerCase())
-        );
-        if (!servicio) return `No encontré el servicio "${servicio_nombre}".`;
-
-        // Calcular hora de fin basada en duración del servicio
-        const startDate = new Date(`${fecha}T${hora}:00`);
-        const endDate = new Date(startDate.getTime() + (servicio.duracion || 60) * 60 * 1000);
-        const pad = (n: number) => n.toString().padStart(2, '0');
-        const endHora = `${pad(endDate.getHours())}:${pad(endDate.getMinutes())}`;
-
-        const payload: CreateAppointmentPayload = {
-          clientName: cliente_nombre,
-          clientLastName: cliente_apellido,
-          clientPhone: cliente_telefono,
-          clientEmail: cliente_email || '',
-          service: servicio.titulo,
-          start: `${fecha}T${hora}:00`,
-          end: `${fecha}T${endHora}:00`,
-          workerId: worker_id,
-          workerName: worker_nombre,
-          message: 'Reserva realizada por WhatsApp Bot',
-        };
-
-        const result = await createAppointment(slug, payload);
-        if (!result.success) return `Error al crear el turno: ${result.error}`;
-
-        if (result.pending) {
-          return `✅ Turno solicitado para ${servicio.titulo} el ${fecha} a las ${hora}. Queda pendiente de confirmación. Te avisaremos cuando esté confirmado.`;
-        }
-
-        return `✅ Turno confirmado para ${servicio.titulo} el ${fecha} a las ${hora}. ¡Te esperamos, ${cliente_nombre}!`;
-      }
-
-      case 'cancelar_turno': {
-        const { telefono } = toolInput as { telefono: string };
-        const supabase = getSupabaseAdmin();
-
-        const now = new Date().toISOString();
-        const { data: turno } = await supabase
-          .from('turnos')
-          .select('*')
-          .eq('negocio_id', Number(negocioId))
-          .eq('cliente_telefono', telefono)
-          .in('estado', ['confirmado', 'pendiente'])
-          .gte('start', now)
-          .order('start', { ascending: true })
-          .limit(1)
-          .single();
-
-        if (!turno) return 'No encontré ningún turno próximo para ese número de teléfono.';
-
-        // Cancelar evento de Google Calendar si existe (mismo patrón que cancel-appointment.ts)
-        if (turno.google_event_id && negocio.google_refresh_token) {
-          try {
-            const { google } = await import('googleapis');
-            const auth = new google.auth.OAuth2(
-              process.env.GOOGLE_CLIENT_ID,
-              process.env.GOOGLE_CLIENT_SECRET
-            );
-            auth.setCredentials({ refresh_token: negocio.google_refresh_token });
-            const calendar = google.calendar({ version: 'v3', auth });
-            await calendar.events.delete({
-              calendarId: 'primary',
-              eventId: turno.google_event_id,
-            });
-          } catch (e) {
-            // Si falla GCal, igual cancelamos en Supabase
-            console.error('[WHATSAPP-BOT] Error cancelando evento de GCal:', e);
-          }
-        }
-
-        await supabase
-          .from('turnos')
-          .update({ estado: 'cancelado' })
-          .eq('id', turno.id);
-
-        const fecha = new Date(turno.start).toLocaleDateString('es-AR');
-        const hora = new Date(turno.start).toLocaleTimeString('es-AR', {
-          hour: '2-digit', minute: '2-digit',
-        });
-        return `✅ Tu turno del ${fecha} a las ${hora} fue cancelado correctamente.`;
-      }
-
-      case 'consultar_mi_turno': {
-        const { telefono } = toolInput as { telefono: string };
-        const supabase = getSupabaseAdmin();
-
-        const now = new Date().toISOString();
-        const { data: turno } = await supabase
-          .from('turnos')
-          .select('*')
-          .eq('negocio_id', Number(negocioId))
-          .eq('cliente_telefono', telefono)
-          .eq('estado', 'confirmado')
-          .gte('start', now)
-          .order('start', { ascending: true })
-          .limit(1)
-          .single();
-
-        if (!turno) return 'No tenés ningún turno próximo confirmado.';
-
-        const fecha = new Date(turno.start).toLocaleDateString('es-AR');
-        const hora = new Date(turno.start).toLocaleTimeString('es-AR', {
-          hour: '2-digit', minute: '2-digit',
-        });
-        return `Tu próximo turno: ${turno.servicio || 'Turno'} el ${fecha} a las ${hora}${
-          turno.saas_worker_name ? ` con ${turno.saas_worker_name}` : ''
-        }.`;
-      }
-
-      default:
-        return 'Tool desconocida.';
-    }
-  } catch (error) {
-    console.error(`[WHATSAPP-BOT] Error en tool ${toolName}:`, error);
-    return 'Error interno al ejecutar la acción. Por favor, intentá de nuevo.';
-  }
+    const { data, error } = await supabaseAdmin.from('negocios').select('*').eq('id', id).single();
+    if (error || !data) return null;
+    const cw = data.config_web || {};
+    return { negocio: data, configWeb: cw, servicios: cw.servicios?.items || [], equipo: cw.equipo?.items || [], schedule: cw.schedule || {}, slug: data.slug, bookingConfig: cw.booking || {} };
+  } catch { return null; }
 }
 
-// ─── Función principal ────────────────────────────────────────────────────────
+function buildPrompt(ctx: NegocioCtx, phone: string): string {
+  const name = ctx.configWeb.hero?.titulo || ctx.negocio.nombre || 'el negocio';
+  const svcs = ctx.servicios.length ? ctx.servicios.map(s => `- ${s.titulo}: $${s.precio || 'Consultar'} (${s.duracion} min)`).join('\n') : 'No hay servicios.';
+  const team = ctx.equipo.length ? ctx.equipo.map(w => `- ${w.nombre} (${w.cargo || 'Profesional'}) [ID: ${w.id}]`).join('\n') : '';
+  const dias = ['Domingo','Lunes','Martes','Miercoles','Jueves','Viernes','Sabado'];
+  const sch = Object.entries(ctx.schedule).map(([d,c]: [string,any]) => { if (!c?.isOpen) return `${dias[Number(d)]}: Cerrado`; const r = c.ranges?.map((x:any)=>`${x.start}-${x.end}`).join(', ')||'09:00-18:00'; return `${dias[Number(d)]}: ${r}`; }).join('\n');
+  const today = new Date().toLocaleDateString('es-AR',{weekday:'long',day:'2-digit',month:'2-digit',year:'numeric',timeZone:'America/Argentina/Buenos_Aires'});
+  let extra = '';
+  if (ctx.bookingConfig.requireManualConfirmation) extra += '\nNegocio con confirmacion manual.';
+  if (ctx.bookingConfig.requestDeposit) extra += `\nPide senia del ${ctx.bookingConfig.depositPercentage||50}%.`;
+  return `Sos el asistente de "${name}" por WhatsApp.\n\nSERVICIOS:\n${svcs}\n${team?`\nEQUIPO:\n${team}`:'\nSin equipo.'}\n\nHORARIOS:\n${sch||'No config'}${extra}\n\nREGLAS:\n- Espaniol argentino, conciso, emojis moderados.\n- Tel cliente: ${phone}. NO pedirlo.\n- Flujo: servicio->profesional->fecha->horario->nombre->email->confirmar.\n- HOY: ${today}.\n- 1 profesional = seleccionar auto. Sin equipo = no preguntar.\n- Confirmar con resumen antes de crear.`;
+}
 
-/**
- * Maneja un mensaje de WhatsApp entrante.
- * Orquesta: verificación de acceso → historial → loop Claude tool use → respuesta.
- *
- * @param negocioId - ID del negocio
- * @param phone - Número de teléfono del usuario (sin @s.whatsapp.net)
- * @param userMessage - Texto del mensaje recibido
- * @returns Texto de respuesta a enviar por WhatsApp
- */
-export async function handleWhatsAppMessage(
-  negocioId: string,
-  phone: string,
-  userMessage: string
-): Promise<string> {
+async function getConv(nid: number, phone: string) {
   try {
-  // 1. Verificar que el bloque esté activo y el chatbot habilitado
-  const { allowed, configWeb, negocio } = await verifyAccess(negocioId);
-  console.log('[WHATSAPP-BOT] verifyAccess result:', { allowed, negocioId });
-  if (!allowed) {
-    return 'Lo siento, el servicio de chatbot no está disponible en este momento.';
-  }
+    const cut = new Date(Date.now()-2*60*60*1000).toISOString();
+    const { data } = await supabaseAdmin.from('whatsapp_conversations').select('*').eq('negocio_id',nid).eq('phone_number',phone).gt('updated_at',cut).order('updated_at',{ascending:false}).limit(1);
+    if (data?.length) return { id: data[0].id, messages: data[0].messages||[], draft: data[0].booking_draft||{}, stage: data[0].stage||'idle' };
+    const { data: c, error } = await supabaseAdmin.from('whatsapp_conversations').insert({negocio_id:nid,phone_number:phone,messages:[],booking_draft:{},stage:'idle'}).select('id').single();
+    if (error||!c) return { id:'tmp-'+Date.now(), messages:[], draft:{}, stage:'idle' };
+    return { id:c.id, messages:[], draft:{}, stage:'idle' };
+  } catch { return { id:'tmp-'+Date.now(), messages:[], draft:{}, stage:'idle' }; }
+}
 
-  // 2. Obtener o crear conversación (sesión de 2hs)
-  const conversation = await getOrCreateConversation(negocioId, phone);
-  console.log('[WHATSAPP-BOT] conversation:', conversation?.id, 'messages count:', conversation?.messages?.length);
+async function saveConv(id: string, msgs: ConvMessage[], draft: any, stage: string) {
+  if (id.startsWith('tmp-')) return;
+  try { await supabaseAdmin.from('whatsapp_conversations').update({messages:msgs.slice(-MAX_HISTORY),booking_draft:draft,stage,updated_at:new Date().toISOString()}).eq('id',id); } catch {}
+}
 
-  if (!conversation) {
-    console.error('[WHATSAPP-BOT] conversation is null after getOrCreateConversation');
-    return 'Lo siento, no pudimos iniciar la conversación en este momento. Por favor, intentá de nuevo.';
-  }
-
-  // 3. Agregar mensaje del usuario al historial
-  const newUserMessage: ConversationMessage = {
-    role: 'user',
-    content: userMessage,
-    timestamp: new Date().toISOString(),
-  };
-  const updatedMessages: ConversationMessage[] = [...conversation.messages, newUserMessage];
-
-  // 4. Construir messages para la API de Claude
-  const apiMessages: Anthropic.MessageParam[] = updatedMessages.map((m) => ({
-    role: m.role,
-    content: m.content,
-  }));
-
-  // 5. Loop de tool use (máx MAX_ITERATIONS para evitar bucles infinitos)
-  let iterations = 0;
-  let finalResponse = '';
-  let currentMessages = apiMessages;
-
-  while (iterations < MAX_ITERATIONS) {
-    iterations++;
-
-    const response = await anthropic.messages.create({
-      model: MODEL,
-      max_tokens: MAX_TOKENS,
-      system: buildSystemPrompt(configWeb, negocio),
-      tools: TOOLS,
-      messages: currentMessages,
-    });
-
-    if (response.stop_reason === 'end_turn') {
-      const textBlock = response.content.find((b) => b.type === 'text');
-      finalResponse = textBlock ? (textBlock as Anthropic.TextBlock).text : '';
-      break;
+async function runTool(name: string, input: any, ctx: NegocioCtx, phone: string): Promise<string> {
+  try {
+    switch(name) {
+      case 'listar_servicios': return JSON.stringify({success:true,servicios:ctx.servicios.map(s=>({nombre:s.titulo,precio:s.precio||'Consultar',duracion:`${s.duracion} min`}))});
+      case 'listar_profesionales': {
+        const svc=ctx.servicios.find(s=>s.titulo.toLowerCase()===(input.servicio||'').toLowerCase());
+        let p=ctx.equipo; if(svc?.workerIds?.length) p=ctx.equipo.filter(w=>svc.workerIds.includes(w.id));
+        return JSON.stringify({success:true,profesionales:p.map(w=>({id:w.id,nombre:w.nombre}))});
+      }
+      case 'consultar_disponibilidad': {
+        const {checkAvailability}=await import('@/blocks/calendar/actions/check-availability');
+        const r=await checkAvailability(ctx.slug,input.fecha,input.worker_id);
+        if(!r.success) return JSON.stringify({success:false,error:(r as any).error});
+        if(!('busy' in r)) return JSON.stringify({success:false,error:'Error'});
+        const svc=ctx.servicios.find(s=>s.titulo.toLowerCase()===(input.servicio||'').toLowerCase());
+        let ws; if(input.worker_id&&ctx.configWeb.equipo?.scheduleType==='per_worker'){const w=ctx.equipo.find(x=>x.id===input.worker_id);ws=w?.schedule;}
+        const slots=generateTimeSlots({date:input.fecha,serviceDuration:svc?.duracion||60,schedule:ctx.schedule,busySlots:r.busy,workerSchedule:ws});
+        const av=slots.filter(s=>s.available).map(s=>s.time);
+        return JSON.stringify({success:true,fecha:input.fecha,horarios:av,total:av.length});
+      }
+      case 'crear_turno': {
+        const svc=ctx.servicios.find(s=>s.titulo.toLowerCase()===input.servicio.toLowerCase());
+        const d=svc?.duracion||60; const st=new Date(`${input.fecha}T${input.hora}:00`); const en=new Date(st.getTime()+d*60000);
+        const {createAppointment}=await import('@/blocks/calendar/actions/create-appointment');
+        const res=await createAppointment(ctx.slug,{service:input.servicio,start:st.toISOString(),end:en.toISOString(),clientName:input.nombre_cliente,clientPhone:phone,clientEmail:input.email_cliente,workerId:input.worker_id,workerName:input.worker_name});
+        return JSON.stringify({success:res.success,pendiente:res.pending||false,error:res.error});
+      }
+      case 'cancelar_turno': {
+        const {data:t}=await supabaseAdmin.from('turnos').select('id,servicio,fecha_inicio,google_event_id').eq('negocio_id',ctx.negocio.id).eq('cliente_telefono',phone).in('estado',['confirmado','pendiente','esperando_senia']).order('fecha_inicio',{ascending:true}).limit(1).single();
+        if(!t) return JSON.stringify({success:false,error:'No hay turno activo.'});
+        if(t.google_event_id&&ctx.negocio.google_refresh_token){try{const{google}=await import('googleapis');const a=new google.auth.OAuth2(process.env.GOOGLE_CLIENT_ID,process.env.GOOGLE_CLIENT_SECRET);a.setCredentials({refresh_token:ctx.negocio.google_refresh_token});await google.calendar({version:'v3',auth:a}).events.delete({calendarId:'primary',eventId:t.google_event_id});}catch{}}
+        await supabaseAdmin.from('turnos').update({estado:'cancelado'}).eq('id',t.id);
+        return JSON.stringify({success:true,mensaje:`Cancelado: ${t.servicio}`});
+      }
+      case 'consultar_mi_turno': {
+        const {data:t}=await supabaseAdmin.from('turnos').select('servicio,fecha_inicio,estado').eq('negocio_id',ctx.negocio.id).eq('cliente_telefono',phone).in('estado',['confirmado','pendiente','esperando_senia']).gt('fecha_inicio',new Date().toISOString()).order('fecha_inicio',{ascending:true}).limit(1).single();
+        if(!t) return JSON.stringify({success:true,turno:null,mensaje:'No tenes turnos.'});
+        const f=new Date(t.fecha_inicio).toLocaleString('es-AR',{timeZone:'America/Argentina/Buenos_Aires',weekday:'long',day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'});
+        return JSON.stringify({success:true,turno:{servicio:t.servicio,fecha:f,estado:t.estado}});
+      }
+      default: return JSON.stringify({success:false,error:'Tool desconocido'});
     }
+  } catch(e:any) { return JSON.stringify({success:false,error:e?.message||'Error'}); }
+}
 
-    if (response.stop_reason === 'tool_use') {
-      const toolUseBlocks = response.content.filter(
-        (b) => b.type === 'tool_use'
-      ) as Anthropic.ToolUseBlock[];
-
-      // Agregar respuesta del asistente (con los tool_use blocks)
-      currentMessages = [
-        ...currentMessages,
-        { role: 'assistant', content: response.content },
-      ];
-
-      // Ejecutar cada tool en paralelo y agregar resultados
-      const toolResults: Anthropic.ToolResultBlockParam[] = await Promise.all(
-        toolUseBlocks.map(async (toolBlock) => {
-          const result = await executeTool(
-            toolBlock.name,
-            toolBlock.input as Record<string, any>,
-            configWeb,
-            negocio,
-            negocioId
-          );
-          return {
-            type: 'tool_result' as const,
-            tool_use_id: toolBlock.id,
-            content: result,
-          };
-        })
-      );
-
-      currentMessages = [
-        ...currentMessages,
-        { role: 'user', content: toolResults },
-      ];
-      continue;
+export async function handleWhatsAppMessage(negocioId: number, phone: string, text: string, senderName?: string): Promise<string> {
+  console.log(`[BOT] ${phone} -> negocio ${negocioId}`);
+  const ctx = await loadCtx(negocioId);
+  if (!ctx) return '';
+  const { allowed } = await verifyAccess(negocioId);
+  if (!allowed) { console.log('[BOT] Acceso denegado'); return ''; }
+  const conv = await getConv(negocioId, phone);
+  const msgs: ConvMessage[] = [...conv.messages, { role: 'user', content: text }];
+  const cm: Anthropic.MessageParam[] = msgs.map(m => ({ role: m.role, content: m.content }));
+  if (senderName && !conv.draft?.clientName) cm[cm.length-1] = { role: 'user', content: `[Nombre: ${senderName}]\n\n${text}` };
+  try {
+    let r = await anthropic.messages.create({ model: MODEL, max_tokens: MAX_TOKENS, system: buildPrompt(ctx, phone), tools: TOOLS, messages: cm });
+    let i = 0;
+    while (r.stop_reason === 'tool_use' && i < 5) {
+      i++;
+      const tb = r.content.find((b): b is Anthropic.ToolUseBlock => b.type === 'tool_use');
+      if (!tb) break;
+      console.log(`[BOT] Tool #${i}: ${tb.name}`);
+      const tr = await runTool(tb.name, tb.input, ctx, phone);
+      cm.push({ role: 'assistant', content: r.content });
+      cm.push({ role: 'user', content: [{ type: 'tool_result', tool_use_id: tb.id, content: tr }] });
+      r = await anthropic.messages.create({ model: MODEL, max_tokens: MAX_TOKENS, system: buildPrompt(ctx, phone), tools: TOOLS, messages: cm });
     }
-
-    // Stop reason inesperado — extraer texto si hay
-    const textBlock = response.content.find((b) => b.type === 'text');
-    finalResponse = textBlock
-      ? (textBlock as Anthropic.TextBlock).text
-      : 'Ocurrió un error. Por favor, intentá de nuevo.';
-    break;
-  }
-
-  if (!finalResponse) {
-    finalResponse = 'Ocurrió un error procesando tu mensaje. Por favor, intentá de nuevo.';
-  }
-
-  // 6. Guardar respuesta del asistente en el historial
-  const assistantMessage: ConversationMessage = {
-    role: 'assistant',
-    content: finalResponse,
-    timestamp: new Date().toISOString(),
-  };
-  const finalMessages = [...updatedMessages, assistantMessage];
-
-  await updateConversation(conversation.id, { messages: finalMessages });
-
-  return finalResponse;
-  } catch (error) {
-    console.error('[WHATSAPP-BOT] handleWhatsAppMessage crashed:', error);
-    throw error;
-  }
+    const reply = r.content.find((b): b is Anthropic.TextBlock => b.type === 'text')?.text || '';
+    if (reply) { await saveConv(conv.id, [...msgs, { role: 'assistant', content: reply }], conv.draft, conv.stage); }
+    return reply;
+  } catch (e: any) { console.error('[BOT] Error:', e?.message); return 'Disculpa, tuve un problema. Intenta de nuevo.'; }
 }
