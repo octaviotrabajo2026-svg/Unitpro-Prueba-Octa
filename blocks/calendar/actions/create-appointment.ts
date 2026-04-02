@@ -4,11 +4,12 @@
 import { createClient } from '@supabase/supabase-js'
 import { google } from 'googleapis'
 import { revalidatePath } from 'next/cache'
-import { 
-  sendNotification, 
+import {
+  sendNotification,
   notifyOwnerNewAppointment,
   formatFechaArgentina,
   type NegocioNotificationData,
+  type NotificationChannel,
 } from '@/lib/notifications'
 
 const supabase = createClient(
@@ -24,19 +25,28 @@ export interface CreateAppointmentPayload {
   clientLastName?: string;
   clientPhone: string;
   clientEmail?: string;
-  
+
   // Datos del turno
   service: string;
   start: string;  // ISO datetime
   end: string;    // ISO datetime
-  
+
   // Profesional (opcional)
   workerId?: string;
   workerName?: string;
-  
+
   // Extras (para confirm-booking)
   message?: string;
   images?: string[];
+
+  /**
+   * BUG 2 fix: cuando el turno se crea desde el bot de WhatsApp, el bot ya
+   * envía su propio mensaje de confirmación al cliente.
+   * Pasando skipWhatsAppNotification: true se omite el canal WhatsApp en la
+   * notificación del sistema para evitar que el cliente reciba dos mensajes.
+   * El email (si corresponde) se sigue enviando normalmente.
+   */
+  skipWhatsAppNotification?: boolean;
 }
 
 export interface CreateAppointmentResult {
@@ -207,6 +217,12 @@ export async function createAppointment(
     }
 
     if (autoConfirmar) {
+      // BUG 2 fix: si el turno viene del bot de WhatsApp, el bot ya envió su
+      // propio mensaje de confirmación. Forzamos solo el canal email para no
+      // duplicar el mensaje de WhatsApp al cliente.
+      const clientNotifChannels: NotificationChannel[] | undefined =
+        bookingData.skipWhatsAppNotification ? ['email'] : undefined;
+
       // Notificar al cliente: turno confirmado
       await sendNotification({
         event: 'turno_creado_cliente',
@@ -224,6 +240,7 @@ export async function createAppointment(
           hora,
           profesional: bookingData.workerName || '',
         },
+        ...(clientNotifChannels ? { forceChannels: clientNotifChannels } : {}),
       })
 
       // Notificar al dueño/profesional: nuevo turno
@@ -263,6 +280,19 @@ export async function createAppointment(
     console.error('[CALENDAR] Error creating appointment:', error)
     return { success: false, error: message }
   }
+}
+
+// ─── Helper: Normalizar datetime para Google Calendar ────────────────────────
+
+/**
+ * Stripea la 'Z' final y cualquier offset timezone (+HH:MM / -HH:MM) de un
+ * string ISO, devolviendo solo la parte local (YYYY-MM-DDTHH:mm:ss).
+ * Google Calendar interpreta correctamente la hora local cuando se acompaña
+ * del campo timeZone en el objeto start/end.
+ */
+function toLocalDateTimeString(isoString: string): string {
+  // Elimina sufijo Z o offset +HH:MM / -HH:MM al final
+  return isoString.replace(/(Z|[+-]\d{2}:\d{2})$/, '');
 }
 
 // ─── Helper: Crear Evento en Google Calendar ─────────────────────────────────
@@ -317,37 +347,47 @@ async function createGoogleCalendarEvent(
       }
 
       if (hayConflicto) {
-        return { 
-          success: false, 
-          error: 'El horario seleccionado ya no está disponible' 
+        return {
+          success: false,
+          error: 'El horario seleccionado ya no está disponible'
         }
       }
     }
 
-    // Crear evento
+    // BUG 1 fix: normalizar datetimes a hora local (sin Z ni offset) para que
+    // Google Calendar los interprete correctamente junto al campo timeZone.
+    const startLocal = toLocalDateTimeString(bookingData.start)
+    const endLocal = toLocalDateTimeString(bookingData.end)
+
+    // BUG 3 fix: construir descripción incluyendo el email del cliente en lugar
+    // de agregarlo como attendee (lo que dispararía una invitación de Google).
     const description = [
       `Servicio: ${bookingData.service}`,
       bookingData.workerName ? `Profesional: ${bookingData.workerName}` : '',
       `Cliente: ${clienteNombre}`,
       `Tel: ${bookingData.clientPhone}`,
+      bookingData.clientEmail ? `Email: ${bookingData.clientEmail}` : '',
     ].filter(Boolean).join('\n')
 
     const event = await calendar.events.insert({
       calendarId: 'primary',
+      // BUG 3 fix: 'none' evita que Google envíe invitaciones/notificaciones
+      // a los attendees. Evita el doble email al cliente.
+      sendUpdates: 'none',
       requestBody: {
         summary: `Turno: ${clienteNombre} (${bookingData.workerName || 'General'})`,
         description,
-        start: { 
-          dateTime: bookingData.start, 
-          timeZone: 'America/Argentina/Buenos_Aires' 
+        start: {
+          dateTime: startLocal,
+          timeZone: 'America/Argentina/Buenos_Aires',
         },
-        end: { 
-          dateTime: bookingData.end, 
-          timeZone: 'America/Argentina/Buenos_Aires' 
+        end: {
+          dateTime: endLocal,
+          timeZone: 'America/Argentina/Buenos_Aires',
         },
-        attendees: bookingData.clientEmail 
-          ? [{ email: bookingData.clientEmail }] 
-          : [],
+        // BUG 3 fix: el cliente NO va como attendee para evitar que Google le
+        // envíe automáticamente una invitación por email.
+        attendees: [],
         extendedProperties: {
           shared: {
             saas_worker_id: bookingData.workerId || '',

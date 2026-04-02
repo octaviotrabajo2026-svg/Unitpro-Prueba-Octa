@@ -56,11 +56,25 @@ function buildPrompt(ctx: NegocioCtx, phone: string): string {
   const team = ctx.equipo.length ? ctx.equipo.map(w => `- ${w.nombre} (${w.cargo || 'Profesional'}) [ID: ${w.id}]`).join('\n') : '';
   const dias = ['Domingo','Lunes','Martes','Miercoles','Jueves','Viernes','Sabado'];
   const sch = Object.entries(ctx.schedule).map(([d,c]: [string,any]) => { if (!c?.isOpen) return `${dias[Number(d)]}: Cerrado`; const r = c.ranges?.map((x:any)=>`${x.start}-${x.end}`).join(', ')||'09:00-18:00'; return `${dias[Number(d)]}: ${r}`; }).join('\n');
-  const today = new Date().toLocaleDateString('es-AR',{weekday:'long',day:'2-digit',month:'2-digit',year:'numeric',timeZone:'America/Argentina/Buenos_Aires'});
+
+  // BUG 4 Fix D: calcular el día de semana por código, no dejárselo a Claude.
+  const now = new Date();
+  const hoyDia = now.toLocaleDateString('es-AR', { weekday: 'long', timeZone: 'America/Argentina/Buenos_Aires' });
+  const hoyFecha = now.toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit', year: 'numeric', timeZone: 'America/Argentina/Buenos_Aires' });
+  const hoyISO = now.toLocaleDateString('en-CA', { timeZone: 'America/Argentina/Buenos_Aires' }); // YYYY-MM-DD
+
   let extra = '';
   if (ctx.bookingConfig.requireManualConfirmation) extra += '\nNegocio con confirmacion manual.';
   if (ctx.bookingConfig.requestDeposit) extra += `\nPide senia del ${ctx.bookingConfig.depositPercentage||50}%.`;
-  return `Sos el asistente de "${name}" por WhatsApp.\n\nSERVICIOS:\n${svcs}\n${team?`\nEQUIPO:\n${team}`:'\nSin equipo.'}\n\nHORARIOS:\n${sch||'No config'}${extra}\n\nREGLAS:\n- Espaniol argentino, conciso, emojis moderados.\n- Tel cliente: ${phone}. NO pedirlo.\n- Flujo: servicio->profesional->fecha->horario->nombre->email->confirmar.\n- HOY: ${today}.\n- 1 profesional = seleccionar auto. Sin equipo = no preguntar.\n- Confirmar con resumen antes de crear.`;
+
+  // BUG 4 Fix A: regla crítica sobre cálculo de días de semana.
+  const reglaDias = `
+REGLA CRITICA: NUNCA calcules por tu cuenta que dia de la semana es una fecha.
+Si el cliente dice "quiero turno el viernes", usa la herramienta consultar_disponibilidad con la fecha del proximo viernes. Si no estas seguro de que fecha corresponde a un dia, preguntale al cliente la fecha exacta (ej: "Que fecha seria? Asi verifico disponibilidad").
+NUNCA digas "el viernes 04/04" sin haber verificado con la herramienta primero.
+La herramienta consultar_disponibilidad te devuelve el campo dia_semana confirmado por codigo: usalo siempre.`;
+
+  return `Sos el asistente de "${name}" por WhatsApp.\n\nSERVICIOS:\n${svcs}\n${team?`\nEQUIPO:\n${team}`:'\nSin equipo.'}\n\nHORARIOS:\n${sch||'No config'}${extra}\n\nREGLAS:\n- Espaniol argentino, conciso, emojis moderados.\n- Tel cliente: ${phone}. NO pedirlo.\n- Flujo: servicio->profesional->fecha->horario->nombre->email->confirmar.\n- HOY es ${hoyDia} ${hoyISO} (${hoyFecha}).\n- 1 profesional = seleccionar auto. Sin equipo = no preguntar.\n- Confirmar con resumen antes de crear.\n${reglaDias}`;
 }
 
 async function getConv(nid: number, phone: string) {
@@ -89,21 +103,56 @@ async function runTool(name: string, input: any, ctx: NegocioCtx, phone: string)
         return JSON.stringify({success:true,profesionales:p.map(w=>({id:w.id,nombre:w.nombre}))});
       }
       case 'consultar_disponibilidad': {
+        // BUG 4 Fix B: calcular día de semana por código para que Claude lo use
+        // en lugar de calcularlo por su cuenta.
+        const fechaObj = new Date(input.fecha + 'T00:00:00');
+        const diaSemana = fechaObj.toLocaleDateString('es-AR', { weekday: 'long' });
+
+        // BUG 4 Fix C: validar que la fecha caiga en un día laborable según la
+        // configuración del negocio, antes de consultar disponibilidad en Google.
+        const diasAbiertos = Object.entries(ctx.schedule)
+          .filter(([, c]: [string, any]) => c?.isOpen)
+          .map(([d]) => Number(d)); // 0=Dom, 1=Lun, ..., 6=Sab
+
+        if (diasAbiertos.length > 0 && !diasAbiertos.includes(fechaObj.getDay())) {
+          const nombresDiasAbiertos = diasAbiertos.map(n =>
+            ['Domingo','Lunes','Martes','Miercoles','Jueves','Viernes','Sabado'][n]
+          ).join(', ');
+          return JSON.stringify({
+            success: false,
+            fecha: input.fecha,
+            dia_semana: diaSemana,
+            error: `El negocio no atiende los ${diaSemana}s. Dias de atencion: ${nombresDiasAbiertos}.`,
+          });
+        }
+
         const {checkAvailability}=await import('@/blocks/calendar/actions/check-availability');
         const r=await checkAvailability(ctx.slug,input.fecha,input.worker_id);
-        if(!r.success) return JSON.stringify({success:false,error:(r as any).error});
-        if(!('busy' in r)) return JSON.stringify({success:false,error:'Error'});
+        if(!r.success) return JSON.stringify({success:false,fecha:input.fecha,dia_semana:diaSemana,error:(r as any).error});
+        if(!('busy' in r)) return JSON.stringify({success:false,fecha:input.fecha,dia_semana:diaSemana,error:'Error al verificar disponibilidad'});
         const svc=ctx.servicios.find(s=>s.titulo.toLowerCase()===(input.servicio||'').toLowerCase());
         let ws; if(input.worker_id&&ctx.configWeb.equipo?.scheduleType==='per_worker'){const w=ctx.equipo.find(x=>x.id===input.worker_id);ws=w?.schedule;}
         const slots=generateTimeSlots({date:input.fecha,serviceDuration:svc?.duracion||60,schedule:ctx.schedule,busySlots:r.busy,workerSchedule:ws});
         const av=slots.filter(s=>s.available).map(s=>s.time);
-        return JSON.stringify({success:true,fecha:input.fecha,horarios:av,total:av.length});
+        // BUG 4 Fix B: incluir dia_semana en la respuesta para que Claude lo use
+        // directamente sin necesidad de calcularlo.
+        return JSON.stringify({
+          success: true,
+          fecha: input.fecha,
+          dia_semana: diaSemana,
+          horarios_disponibles: av,
+          total: av.length,
+          mensaje: `Fecha consultada: ${diaSemana} ${input.fecha}`,
+        });
       }
       case 'crear_turno': {
         const svc=ctx.servicios.find(s=>s.titulo.toLowerCase()===input.servicio.toLowerCase());
         const d=svc?.duracion||60; const st=new Date(`${input.fecha}T${input.hora}:00`); const en=new Date(st.getTime()+d*60000);
         const {createAppointment}=await import('@/blocks/calendar/actions/create-appointment');
-        const res=await createAppointment(ctx.slug,{service:input.servicio,start:st.toISOString(),end:en.toISOString(),clientName:input.nombre_cliente,clientPhone:phone,clientEmail:input.email_cliente,workerId:input.worker_id,workerName:input.worker_name});
+        // BUG 2 fix: el bot ya envía su propio mensaje de confirmación, por lo
+        // que se omite el canal WhatsApp en el sistema de notificaciones para
+        // evitar que el cliente reciba dos mensajes. El email sigue enviándose.
+        const res=await createAppointment(ctx.slug,{service:input.servicio,start:st.toISOString(),end:en.toISOString(),clientName:input.nombre_cliente,clientPhone:phone,clientEmail:input.email_cliente,workerId:input.worker_id,workerName:input.worker_name,skipWhatsAppNotification:true});
         return JSON.stringify({success:res.success,pendiente:res.pending||false,error:res.error});
       }
       case 'cancelar_turno': {
