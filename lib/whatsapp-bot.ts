@@ -74,7 +74,16 @@ Si el cliente dice "quiero turno el viernes", usa la herramienta consultar_dispo
 NUNCA digas "el viernes 04/04" sin haber verificado con la herramienta primero.
 La herramienta consultar_disponibilidad te devuelve el campo dia_semana confirmado por codigo: usalo siempre.`;
 
-  return `Sos el asistente de "${name}" por WhatsApp.\n\nSERVICIOS:\n${svcs}\n${team?`\nEQUIPO:\n${team}`:'\nSin equipo.'}\n\nHORARIOS:\n${sch||'No config'}${extra}\n\nREGLAS:\n- Espaniol argentino, conciso, emojis moderados.\n- Tel cliente: ${phone}. NO pedirlo.\n- Flujo: servicio->profesional->fecha->horario->nombre->email->confirmar.\n- HOY es ${hoyDia} ${hoyISO} (${hoyFecha}).\n- 1 profesional = seleccionar auto. Sin equipo = no preguntar.\n- Confirmar con resumen antes de crear.\n${reglaDias}`;
+  // BUG 3 fix: regla para evitar que el bot cree un turno nuevo cuando el
+  // cliente quiere modificar datos después de haber confirmado uno.
+  const reglaTurnosDuplicados = `
+REGLA CRITICA - TURNOS DUPLICADOS:
+Si el cliente acaba de confirmar un turno y quiere cambiar algun dato (email, nombre, telefono, etc.),
+NO crees un turno nuevo. El turno ya quedo registrado.
+Respondele que el turno ya esta confirmado y que para modificar datos debe comunicarse directamente
+con el negocio. NUNCA crees dos turnos para el mismo cliente en el mismo horario.`;
+
+  return `Sos el asistente de "${name}" por WhatsApp.\n\nSERVICIOS:\n${svcs}\n${team?`\nEQUIPO:\n${team}`:'\nSin equipo.'}\n\nHORARIOS:\n${sch||'No config'}${extra}\n\nREGLAS:\n- Espaniol argentino, conciso, emojis moderados.\n- Tel cliente: ${phone}. NO pedirlo.\n- Flujo: servicio->profesional->fecha->horario->nombre->email->confirmar.\n- HOY es ${hoyDia} ${hoyISO} (${hoyFecha}).\n- 1 profesional = seleccionar auto. Sin equipo = no preguntar.\n- Confirmar con resumen antes de crear.\n${reglaDias}${reglaTurnosDuplicados}`;
 }
 
 async function getConv(nid: number, phone: string) {
@@ -147,12 +156,37 @@ async function runTool(name: string, input: any, ctx: NegocioCtx, phone: string)
       }
       case 'crear_turno': {
         const svc=ctx.servicios.find(s=>s.titulo.toLowerCase()===input.servicio.toLowerCase());
-        const d=svc?.duracion||60; const st=new Date(`${input.fecha}T${input.hora}:00`); const en=new Date(st.getTime()+d*60000);
+        const d=svc?.duracion||60;
+        // BUG 1 fix: construir el datetime como string puro sin pasar por new
+        // Date() + toISOString(), que en Vercel (UTC) introduciría un offset de
+        // 3hs al guardarlo en Supabase. La hora que llega (input.hora) ya es
+        // hora argentina; se arma el ISO sin sufijo timezone para que no haya
+        // conversión en ningún paso.
+        const [startH, startM] = input.hora.split(':').map(Number);
+        const totalMinutes = startH * 60 + startM + d;
+        const endH = Math.floor(totalMinutes / 60) % 24;
+        const endM = totalMinutes % 60;
+        const pad = (n: number) => String(n).padStart(2, '0');
+        const startStr = `${input.fecha}T${input.hora}:00`;
+        const endStr = `${input.fecha}T${pad(endH)}:${pad(endM)}:00`;
+        // BUG 2 fix: validar que no exista ya un turno en el mismo horario
+        // para el mismo negocio antes de crear uno nuevo.
+        const fechaInicioISO = startStr;
+        const { data: turnoExistente } = await supabaseAdmin
+          .from('turnos')
+          .select('id')
+          .eq('negocio_id', ctx.negocio.id)
+          .eq('fecha_inicio', fechaInicioISO)
+          .neq('estado', 'cancelado')
+          .maybeSingle();
+        if (turnoExistente) {
+          return JSON.stringify({ success: false, error: 'Ya hay un turno reservado para ese horario. Por favor elegí otro horario disponible.' });
+        }
         const {createAppointment}=await import('@/blocks/calendar/actions/create-appointment');
-        // BUG 2 fix: el bot ya envía su propio mensaje de confirmación, por lo
-        // que se omite el canal WhatsApp en el sistema de notificaciones para
-        // evitar que el cliente reciba dos mensajes. El email sigue enviándose.
-        const res=await createAppointment(ctx.slug,{service:input.servicio,start:st.toISOString(),end:en.toISOString(),clientName:input.nombre_cliente,clientPhone:phone,clientEmail:input.email_cliente,workerId:input.worker_id,workerName:input.worker_name,skipWhatsAppNotification:true});
+        // El bot ya envía su propio mensaje de confirmación, por lo que se
+        // omite el canal WhatsApp en el sistema de notificaciones para evitar
+        // que el cliente reciba dos mensajes. El email sigue enviándose.
+        const res=await createAppointment(ctx.slug,{service:input.servicio,start:startStr,end:endStr,clientName:input.nombre_cliente,clientPhone:phone,clientEmail:input.email_cliente,workerId:input.worker_id,workerName:input.worker_name,skipWhatsAppNotification:true});
         return JSON.stringify({success:res.success,pendiente:res.pending||false,error:res.error});
       }
       case 'cancelar_turno': {

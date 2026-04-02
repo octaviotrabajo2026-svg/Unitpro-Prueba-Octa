@@ -10,9 +10,9 @@ import { createClient } from '@/lib/supabase';
 
 interface ConversationPreview {
   id: string;
-  phone: string;
+  phone_number: string;
   messages: Array<{ role: string; content: string }>;
-  last_activity: string;
+  updated_at: string;
 }
 
 interface Stats {
@@ -39,13 +39,16 @@ export default function ChatbotAdmin({ negocio }: BlockAdminProps) {
     const supabase = createClient();
     const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
 
+    // BUG 4 fix: el bot actualiza 'updated_at', no 'last_activity'. Se corrige
+    // la columna en el filtro y el select para que las conversaciones recientes
+    // aparezcan correctamente.
     const [{ data: recent }, { data: allConvs }] = await Promise.all([
       supabase
         .from('whatsapp_conversations')
-        .select('id, phone, messages, last_activity')
+        .select('id, phone_number, messages, updated_at')
         .eq('negocio_id', negocio.id)
-        .gte('last_activity', yesterday)
-        .order('last_activity', { ascending: false })
+        .gte('updated_at', yesterday)
+        .order('updated_at', { ascending: false })
         .limit(20),
       supabase
         .from('whatsapp_conversations')
@@ -213,7 +216,7 @@ export default function ChatbotAdmin({ negocio }: BlockAdminProps) {
           <div className="space-y-2">
             {conversations.map((conv) => {
               const lastMsg = conv.messages?.[conv.messages.length - 1];
-              const timeAgo = new Date(conv.last_activity).toLocaleTimeString('es-AR', {
+              const timeAgo = new Date(conv.updated_at).toLocaleTimeString('es-AR', {
                 hour: '2-digit',
                 minute: '2-digit',
               });
@@ -224,7 +227,7 @@ export default function ChatbotAdmin({ negocio }: BlockAdminProps) {
                 >
                   <div className="flex items-center justify-between mb-1">
                     <span className="text-sm font-medium text-zinc-800">
-                      {conv.phone}
+                      {conv.phone_number}
                     </span>
                     <span className="text-xs text-zinc-400">{timeAgo}</span>
                   </div>
