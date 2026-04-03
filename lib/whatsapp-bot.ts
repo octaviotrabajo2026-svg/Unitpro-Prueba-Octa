@@ -5,8 +5,8 @@ import { generateTimeSlots } from '@/lib/time-slots';
 
 const anthropic = new Anthropic();
 const MODEL = 'claude-sonnet-4-20250514';
-const MAX_TOKENS = 600;
-const MAX_HISTORY = 20;
+const MAX_TOKENS = 250;
+const MAX_HISTORY = 8;
 
 const supabaseAdmin = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
 
@@ -79,20 +79,15 @@ function buildPrompt(ctx: NegocioCtx, phone: string): string {
   const reglaDias = `
 REGLA CRITICA DE FECHAS:
 - HOY es ${hoyDia} ${hoyISO} (${hoyFecha}).
-- Si el cliente dice "mañana": es ${mananaFecha}. Podés usar esa fecha directamente.
-- Si el cliente dice "pasado mañana": es ${pasadoFecha}. Podés usar esa fecha directamente.
-- Si el cliente dice cualquier otro dia de la semana (ej: "el lunes", "el viernes", "el jueves"): SIEMPRE pedile la fecha exacta. Decí algo como "¿Qué fecha sería ese lunes? Así verifico la disponibilidad exacta." NUNCA intentes calcular qué fecha corresponde a un día de la semana distinto de hoy/mañana/pasado mañana.
-- Solo procedé a consultar_disponibilidad cuando tengas la fecha numérica exacta (ej: "06/04", "2026-04-06").
-- Es preferible hacer UNA pregunta extra que agendar un turno en el día equivocado.`;
+- "mañana": ${mananaFecha}. "pasado mañana": ${pasadoFecha}.
+- Otro dia de la semana: pedí la fecha exacta. NUNCA calcules fechas futuras.
+- Solo llamá consultar_disponibilidad con fecha numérica exacta (ej: "2026-04-06").`;
 
   // BUG 3 fix: regla para evitar que el bot cree un turno nuevo cuando el
   // cliente quiere modificar datos después de haber confirmado uno.
   const reglaTurnosDuplicados = `
 REGLA CRITICA - TURNOS DUPLICADOS:
-Si el cliente acaba de confirmar un turno y quiere cambiar algun dato (email, nombre, telefono, etc.),
-NO crees un turno nuevo. El turno ya quedo registrado.
-Respondele que el turno ya esta confirmado y que para modificar datos debe comunicarse directamente
-con el negocio. NUNCA crees dos turnos para el mismo cliente en el mismo horario.`;
+Si el turno ya fue confirmado y el cliente quiere cambiar datos, NO crees turno nuevo. Decile que contacte al negocio para modificar. NUNCA crees dos turnos para el mismo horario.`;
 
   return `Sos el asistente de "${name}" por WhatsApp.\n\nSERVICIOS:\n${svcs}\n${team?`\nEQUIPO:\n${team}`:'\nSin equipo.'}\n\nHORARIOS:\n${sch||'No config'}${extra}\n\nREGLAS:\n- Espaniol argentino, conciso, emojis moderados.\n- Tel cliente: ${phone}. NO pedirlo.\n- Flujo: servicio->profesional->fecha->horario->nombre->email->confirmar.\n- HOY es ${hoyDia} ${hoyISO} (${hoyFecha}).\n- 1 profesional = seleccionar auto. Sin equipo = no preguntar.\n- Confirmar con resumen antes de crear.\n${reglaDias}${reglaTurnosDuplicados}`;
 }
@@ -227,6 +222,22 @@ export async function handleWhatsAppMessage(negocioId: number, phone: string, te
   if (!ctx) return '';
   const { allowed } = await verifyAccess(negocioId);
   if (!allowed) { console.log('[BOT] Acceso denegado'); return ''; }
+
+  // Verificar cooldown (sin filtro de 2hs para que persista entre conversaciones)
+  const { data: cooldownRow } = await supabaseAdmin
+    .from('whatsapp_conversations')
+    .select('id, off_topic_count, cooldown_until')
+    .eq('negocio_id', negocioId)
+    .eq('phone_number', phone)
+    .order('updated_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (cooldownRow?.cooldown_until && new Date(cooldownRow.cooldown_until) > new Date()) {
+    console.log(`[BOT] ${phone} en cooldown hasta ${cooldownRow.cooldown_until}`);
+    return '¡Hola! En este momento no puedo asistirte. Escribime cuando necesites agendar un turno y con gusto te ayudo. 😊';
+  }
+
   const conv = await getConv(negocioId, phone);
   const msgs: ConvMessage[] = [...conv.messages, { role: 'user', content: text }];
   const cm: Anthropic.MessageParam[] = msgs.map(m => ({ role: m.role, content: m.content }));
@@ -234,8 +245,10 @@ export async function handleWhatsAppMessage(negocioId: number, phone: string, te
   try {
     let r = await anthropic.messages.create({ model: MODEL, max_tokens: MAX_TOKENS, system: buildPrompt(ctx, phone), tools: TOOLS, messages: cm });
     let i = 0;
+    let usedAnyTool = false;
     while (r.stop_reason === 'tool_use' && i < 5) {
       i++;
+      usedAnyTool = true;
       const tb = r.content.find((b): b is Anthropic.ToolUseBlock => b.type === 'tool_use');
       if (!tb) break;
       console.log(`[BOT] Tool #${i}: ${tb.name}`);
@@ -246,6 +259,23 @@ export async function handleWhatsAppMessage(negocioId: number, phone: string, te
     }
     const reply = r.content.find((b): b is Anthropic.TextBlock => b.type === 'text')?.text || '';
     if (reply) { await saveConv(conv.id, [...msgs, { role: 'assistant', content: reply }], conv.draft, conv.stage); }
+
+    // Actualizar off_topic_count en la fila activa
+    const rowId = conv.id.startsWith('tmp-') ? (cooldownRow?.id || null) : conv.id;
+    if (rowId && !String(rowId).startsWith('tmp-')) {
+      if (!usedAnyTool) {
+        const currentCount = (cooldownRow?.off_topic_count || 0) + 1;
+        const updates: Record<string, any> = { off_topic_count: currentCount };
+        if (currentCount >= 3) {
+          updates.cooldown_until = new Date(Date.now() + 30 * 60 * 1000).toISOString();
+          console.log(`[BOT] ${phone} alcanzó ${currentCount} mensajes off-topic. Cooldown activado.`);
+        }
+        await supabaseAdmin.from('whatsapp_conversations').update(updates).eq('id', rowId);
+      } else {
+        await supabaseAdmin.from('whatsapp_conversations').update({ off_topic_count: 0, cooldown_until: null }).eq('id', rowId);
+      }
+    }
+
     return reply;
   } catch (e: any) { console.error('[BOT] Error:', e?.message); return 'Disculpa, tuve un problema. Intenta de nuevo.'; }
 }
