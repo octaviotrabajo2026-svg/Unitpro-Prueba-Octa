@@ -180,8 +180,8 @@ async function runTool(name: string, input: any, ctx: NegocioCtx, phone: string)
         const endH = Math.floor(totalMinutes / 60) % 24;
         const endM = totalMinutes % 60;
         const pad = (n: number) => String(n).padStart(2, '0');
-        const startStr = `${input.fecha}T${horaNorm}:00`;
-        const endStr = `${input.fecha}T${pad(endH)}:${pad(endM)}:00`;
+        const startStr = `${input.fecha}T${horaNorm}:00-03:00`;
+        const endStr = `${input.fecha}T${pad(endH)}:${pad(endM)}:00-03:00`;
         console.log('[BOT] crear_turno datetime:', { fecha: input.fecha, hora: input.hora, horaNorm, startStr, endStr });
         // BUG 2 fix: validar que no exista ya un turno en el mismo horario
         // para el mismo negocio antes de crear uno nuevo.
