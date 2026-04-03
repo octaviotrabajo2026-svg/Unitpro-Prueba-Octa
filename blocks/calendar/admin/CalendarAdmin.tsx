@@ -18,6 +18,7 @@ import { cancelAppointment } from "@/blocks/calendar/actions";
 import ManualBookingManager      from "@/components/dashboards/ManualBookingManager";
 import BlockTimeManager          from "@/components/dashboards/BlockTimeManager";
 import type { BlockAdminProps }  from "@/types/blocks";
+import { parseAsArgentinaTime }  from "@/lib/date-utils";
 
 const PRIMARY = "#577a2c";
 type SubTab = "calendario" | "gestion" | "promociones";
@@ -168,11 +169,11 @@ function CalendarioTab({ negocio, sharedData }: { negocio: any; sharedData: any 
           {days.map((day, i) => {
             const dayTurnos = turnos
               .filter((t: any) => {
-                const d = new Date(t.fecha_inicio);
+                const d = parseAsArgentinaTime(t.fecha_inicio);
                 return d.getDate() === day.getDate() && d.getMonth() === day.getMonth()
                   && d.getFullYear() === day.getFullYear() && pasaFiltro(t);
               })
-              .sort((a: any, b: any) => new Date(a.fecha_inicio).getTime() - new Date(b.fecha_inicio).getTime());
+              .sort((a: any, b: any) => parseAsArgentinaTime(a.fecha_inicio).getTime() - parseAsArgentinaTime(b.fecha_inicio).getTime());
 
             return (
               <div key={i} className={`border-r border-zinc-100 last:border-0 p-2 space-y-2 ${isToday(day) ? "bg-blue-50/10" : ""}`}>
@@ -205,10 +206,10 @@ function CalendarioTab({ negocio, sharedData }: { negocio: any; sharedData: any 
                       <div className={`flex justify-between items-start mb-2 p-1.5 rounded ${s.bg} ${s.text}`}>
                         <p className="text-[11px] font-bold flex flex-wrap items-center gap-1 leading-tight">
                           <Clock size={12} className="shrink-0" />
-                          {new Date(t.fecha_inicio).toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit" })}
+                          {parseAsArgentinaTime(t.fecha_inicio).toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit" })}
                           {t.fecha_fin && (
                             <span className="font-medium opacity-80">
-                              {" - "}{new Date(t.fecha_fin).toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit" })}
+                              {" - "}{parseAsArgentinaTime(t.fecha_fin).toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit" })}
                             </span>
                           )}
                         </p>

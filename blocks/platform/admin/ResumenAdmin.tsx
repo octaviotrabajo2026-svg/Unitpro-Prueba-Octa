@@ -2,13 +2,14 @@
 // blocks/platform/admin/ResumenAdmin.tsx
 import { CalendarDays, Calendar, Star } from "lucide-react";
 import type { BlockAdminProps } from "@/types/blocks";
+import { parseAsArgentinaTime } from "@/lib/date-utils";
 
 export default function ResumenAdmin({ negocio, sharedData }: BlockAdminProps) {
   const { turnos, resenas } = sharedData;
   const promedio = resenas.length > 0
     ? (resenas.reduce((a, r) => a + r.puntuacion, 0) / resenas.length).toFixed(1)
     : "0.0";
-  const proximos = turnos.filter(t => new Date(t.fecha_inicio) > new Date()).length;
+  const proximos = turnos.filter(t => parseAsArgentinaTime(t.fecha_inicio) > new Date()).length;
 
   return (
     <div className="space-y-8 animate-in fade-in">

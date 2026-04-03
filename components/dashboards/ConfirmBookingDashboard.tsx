@@ -25,6 +25,7 @@ import DomainManager from "@/components/dashboards/DomainManager";
 import { Palette } from "lucide-react";
 import WebEditor from "@/app/[slug]/dashboard/WebEditor";
 import BlockMarketplace from "@/components/dashboards/BlockMarketplace";
+import { parseAsArgentinaTime } from "@/lib/date-utils";
 
 // --- CONFIGURACIÓN ---
 const CONST_LINK_MP = "https://www.mercadopago.com.ar/subscriptions/checkout?preapproval_plan_id=TU_ID_DE_PLAN"; 
@@ -481,7 +482,7 @@ export default function ConfirmBookingDashboard({ initialData }: { initialData: 
                         />
                         <StatCard 
                             title="Próximos Turnos" 
-                            value={turnos.filter(t => new Date(t.fecha_inicio) > new Date()).length} 
+                            value={turnos.filter(t => parseAsArgentinaTime(t.fecha_inicio) > new Date()).length}
                             icon={<CalendarIcon className="text-purple-600" size={20}/>}
                             subtext="Sincronizados con Google Calendar"
                         />
@@ -569,8 +570,8 @@ export default function ConfirmBookingDashboard({ initialData }: { initialData: 
                                             </div>
                                             <p className="text-zinc-600 text-sm font-medium">{t.servicio}</p>
                                             <div className="flex gap-4 mt-2 text-xs text-zinc-400">
-                                                <span className="flex items-center gap-1"><CalendarIcon size={14}/> {new Date(t.fecha_inicio).toLocaleDateString()}</span>
-                                                <span className="flex items-center gap-1"><Clock size={14}/> {new Date(t.fecha_inicio).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}hs</span>
+                                                <span className="flex items-center gap-1"><CalendarIcon size={14}/> {parseAsArgentinaTime(t.fecha_inicio).toLocaleDateString()}</span>
+                                                <span className="flex items-center gap-1"><Clock size={14}/> {parseAsArgentinaTime(t.fecha_inicio).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}hs</span>
                                             </div>
                                             <p className="text-[10px] text-orange-600 mt-2 font-bold">⚠️ No agendado en Google Calendar todavía.</p>
                                         </div>
@@ -639,8 +640,8 @@ export default function ConfirmBookingDashboard({ initialData }: { initialData: 
                                             </div>
                                             <p className="text-zinc-600 text-sm font-medium">{t.servicio}</p>
                                             <div className="flex flex-wrap gap-4 mt-3 text-xs text-zinc-400 font-mono">
-                                                <span className="flex items-center gap-1"><CalendarIcon size={14}/> {new Date(t.fecha_inicio).toLocaleDateString()}</span>
-                                                <span className="flex items-center gap-1"><Clock size={14}/> {new Date(t.fecha_inicio).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}hs</span>
+                                                <span className="flex items-center gap-1"><CalendarIcon size={14}/> {parseAsArgentinaTime(t.fecha_inicio).toLocaleDateString()}</span>
+                                                <span className="flex items-center gap-1"><Clock size={14}/> {parseAsArgentinaTime(t.fecha_inicio).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}hs</span>
                                             </div>
                                             {(t.mensaje || (t.fotos && t.fotos.length > 0)) && (
                                                 <div className="mt-2 p-4 bg-zinc-50 rounded-xl border border-zinc-100 space-y-4">
@@ -695,7 +696,7 @@ export default function ConfirmBookingDashboard({ initialData }: { initialData: 
                                             <button 
                                                 onClick={() => {
                                                     // Calculamos duración actual en minutos
-                                                    const dur = Math.round((new Date(t.fecha_fin).getTime() - new Date(t.fecha_inicio).getTime()) / 60000);
+                                                    const dur = Math.round((parseAsArgentinaTime(t.fecha_fin).getTime() - parseAsArgentinaTime(t.fecha_inicio).getTime()) / 60000);
                                                     onPreConfirm(t.id, t.precio_total || 0, dur);
                                                 }}
                                                 className="..."
@@ -1044,9 +1045,9 @@ function CalendarTab({ negocio, turnos, handleConnectGoogle, onCancel, onContact
                 <div className="flex-1 grid grid-cols-1 lg:grid-cols-7 overflow-y-auto min-h-[500px] pb-32">
                     {days.map((day, i) => {
                         const dayTurnos = turnos.filter((t: any) => {
-                            const tDate = new Date(t.fecha_inicio);
+                            const tDate = parseAsArgentinaTime(t.fecha_inicio);
                             return tDate.getDate() === day.getDate() && tDate.getMonth() === day.getMonth() && tDate.getFullYear() === day.getFullYear() && turnoPasaFiltro(t);
-                        }).sort((a: any, b: any) => new Date(a.fecha_inicio).getTime() - new Date(b.fecha_inicio).getTime());
+                        }).sort((a: any, b: any) => parseAsArgentinaTime(a.fecha_inicio).getTime() - parseAsArgentinaTime(b.fecha_inicio).getTime());
 
                         return (
                             <div key={i} className={`border-r border-zinc-100 last:border-0 p-2 space-y-2 ${isToday(day) ? 'bg-blue-50/10' : ''}`}>
@@ -1094,13 +1095,13 @@ function CalendarTab({ negocio, turnos, handleConnectGoogle, onCancel, onContact
                                                         <Clock size={12} className="shrink-0" /> 
                                                         
                                                         <span>
-                                                            {new Date(t.fecha_inicio).toLocaleTimeString('es-AR', {hour: '2-digit', minute:'2-digit'})}
+                                                            {parseAsArgentinaTime(t.fecha_inicio).toLocaleTimeString('es-AR', {hour: '2-digit', minute:'2-digit'})}
                                                         </span>
-                                                        
+
                                                         {/* MOSTRAR HORA DE FIN EN LUGAR DE LA DURACIÓN */}
                                                         {t.fecha_fin && (
                                                             <span className="font-medium opacity-80 whitespace-nowrap">
-                                                                - {new Date(t.fecha_fin).toLocaleTimeString('es-AR', {hour: '2-digit', minute:'2-digit'})}
+                                                                - {parseAsArgentinaTime(t.fecha_fin).toLocaleTimeString('es-AR', {hour: '2-digit', minute:'2-digit'})}
                                                             </span>
                                                         )}
                                                     </p>

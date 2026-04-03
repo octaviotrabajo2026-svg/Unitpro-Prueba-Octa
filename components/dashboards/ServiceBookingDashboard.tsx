@@ -17,6 +17,7 @@ import BlockTimeManager from "@/components/dashboards/BlockTimeManager";
 import ManualBookingManager from "./ManualBookingManager";
 import { PasswordManager } from "@/components/dashboards/PasswordManager";
 import { rescheduleBooking, cancelBooking } from "@/app/actions/service-booking/calendar-actions";
+import { parseAsArgentinaTime } from "@/lib/date-utils";
 
 // --- CONFIGURACIÓN ---
 const CONST_LINK_MP = "https://www.mercadopago.com.ar/subscriptions/checkout?preapproval_plan_id=TU_ID_DE_PLAN"; 
@@ -353,7 +354,7 @@ useEffect(() => {
                         />
                         <StatCard 
                             title="Próximos Turnos" 
-                            value={turnos.filter(t => new Date(t.fecha_inicio) > new Date()).length} 
+                            value={turnos.filter(t => parseAsArgentinaTime(t.fecha_inicio) > new Date()).length}
                             icon={<CalendarIcon className="text-purple-600" size={20}/>}
                             subtext="Sincronizados con Google Calendar"
                         />
@@ -610,9 +611,9 @@ function CalendarTab({ negocio, turnos, handleConnectGoogle, onCancel, onContact
                 <div className="flex-1 grid grid-cols-1 md:grid-cols-7 overflow-y-auto min-h-[500px]">
                     {days.map((day, i) => {
                         const dayTurnos = turnos.filter((t: any) => {
-                            const tDate = new Date(t.fecha_inicio);
-                            return tDate.getDate() === day.getDate() && 
-                                   tDate.getMonth() === day.getMonth() && 
+                            const tDate = parseAsArgentinaTime(t.fecha_inicio);
+                            return tDate.getDate() === day.getDate() &&
+                                   tDate.getMonth() === day.getMonth() &&
                                    tDate.getFullYear() === day.getFullYear();
                         });
 
@@ -639,7 +640,7 @@ function CalendarTab({ negocio, turnos, handleConnectGoogle, onCancel, onContact
                                         <div className="flex justify-between items-start mb-1 relative">
                                             <p className="text-xs font-bold text-zinc-400 flex items-center gap-1">
                                                 <Clock size={10}/> 
-                                                {new Date(t.fecha_inicio).toLocaleTimeString('es-AR', {hour: '2-digit', minute:'2-digit'})}
+                                                {parseAsArgentinaTime(t.fecha_inicio).toLocaleTimeString('es-AR', {hour: '2-digit', minute:'2-digit'})}
                                             </p>
 
                                             {/* BOTÓN 3 PUNTOS */}

@@ -15,6 +15,7 @@ import {
   markDepositPaid,
 } from "@/blocks/calendar/actions";
 import type { BlockAdminProps } from "@/types/blocks";
+import { parseAsArgentinaTime } from "@/lib/date-utils";
 
 const PRIMARY = "#577a2c";
 
@@ -54,7 +55,7 @@ export default function SolicitudesAdmin({ negocio, sharedData }: BlockAdminProp
 
   const handleAccept = (t: any) => {
     const dur = Math.round(
-      (new Date(t.fecha_fin).getTime() - new Date(t.fecha_inicio).getTime()) / 60000
+      (parseAsArgentinaTime(t.fecha_fin).getTime() - parseAsArgentinaTime(t.fecha_inicio).getTime()) / 60000
     );
     openConfirmModal(t.id, t.precio_total || 0, dur);
   };
@@ -119,10 +120,10 @@ export default function SolicitudesAdmin({ negocio, sharedData }: BlockAdminProp
                 <div className="flex gap-4 mt-2 text-xs text-zinc-400">
                   <span className="flex items-center gap-1">
                     <Clock size={14} />
-                    {new Date(t.fecha_inicio).toLocaleDateString("es-AR")}
+                    {parseAsArgentinaTime(t.fecha_inicio).toLocaleDateString("es-AR")}
                   </span>
                   <span>
-                    {new Date(t.fecha_inicio).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}hs
+                    {parseAsArgentinaTime(t.fecha_inicio).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}hs
                   </span>
                 </div>
                 <p className="text-[10px] text-orange-600 mt-2 font-bold">
@@ -173,9 +174,9 @@ export default function SolicitudesAdmin({ negocio, sharedData }: BlockAdminProp
                 <p className="text-zinc-600 text-sm font-medium">{t.servicio}</p>
                 <div className="flex flex-wrap gap-4 mt-3 text-xs text-zinc-400 font-mono">
                   <span className="flex items-center gap-1">
-                    <Clock size={14} /> {new Date(t.fecha_inicio).toLocaleDateString("es-AR")}
+                    <Clock size={14} /> {parseAsArgentinaTime(t.fecha_inicio).toLocaleDateString("es-AR")}
                   </span>
-                  <span>{new Date(t.fecha_inicio).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}hs</span>
+                  <span>{parseAsArgentinaTime(t.fecha_inicio).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}hs</span>
                 </div>
 
                 {/* Mensaje y fotos adjuntas */}
