@@ -67,12 +67,23 @@ function buildPrompt(ctx: NegocioCtx, phone: string): string {
   if (ctx.bookingConfig.requireManualConfirmation) extra += '\nNegocio con confirmacion manual.';
   if (ctx.bookingConfig.requestDeposit) extra += `\nPide senia del ${ctx.bookingConfig.depositPercentage||50}%.`;
 
+  const manana = new Date(now);
+  manana.setDate(manana.getDate() + 1);
+  const mananaFecha = manana.toLocaleDateString('es-AR', { weekday: 'long', day: '2-digit', month: '2-digit', year: 'numeric', timeZone: 'America/Argentina/Buenos_Aires' });
+
+  const pasado = new Date(now);
+  pasado.setDate(pasado.getDate() + 2);
+  const pasadoFecha = pasado.toLocaleDateString('es-AR', { weekday: 'long', day: '2-digit', month: '2-digit', year: 'numeric', timeZone: 'America/Argentina/Buenos_Aires' });
+
   // BUG 4 Fix A: regla crítica sobre cálculo de días de semana.
   const reglaDias = `
-REGLA CRITICA: NUNCA calcules por tu cuenta que dia de la semana es una fecha.
-Si el cliente dice "quiero turno el viernes", usa la herramienta consultar_disponibilidad con la fecha del proximo viernes. Si no estas seguro de que fecha corresponde a un dia, preguntale al cliente la fecha exacta (ej: "Que fecha seria? Asi verifico disponibilidad").
-NUNCA digas "el viernes 04/04" sin haber verificado con la herramienta primero.
-La herramienta consultar_disponibilidad te devuelve el campo dia_semana confirmado por codigo: usalo siempre.`;
+REGLA CRITICA DE FECHAS:
+- HOY es ${hoyDia} ${hoyISO} (${hoyFecha}).
+- Si el cliente dice "mañana": es ${mananaFecha}. Podés usar esa fecha directamente.
+- Si el cliente dice "pasado mañana": es ${pasadoFecha}. Podés usar esa fecha directamente.
+- Si el cliente dice cualquier otro dia de la semana (ej: "el lunes", "el viernes", "el jueves"): SIEMPRE pedile la fecha exacta. Decí algo como "¿Qué fecha sería ese lunes? Así verifico la disponibilidad exacta." NUNCA intentes calcular qué fecha corresponde a un día de la semana distinto de hoy/mañana/pasado mañana.
+- Solo procedé a consultar_disponibilidad cuando tengas la fecha numérica exacta (ej: "06/04", "2026-04-06").
+- Es preferible hacer UNA pregunta extra que agendar un turno en el día equivocado.`;
 
   // BUG 3 fix: regla para evitar que el bot cree un turno nuevo cuando el
   // cliente quiere modificar datos después de haber confirmado uno.
@@ -162,13 +173,16 @@ async function runTool(name: string, input: any, ctx: NegocioCtx, phone: string)
         // 3hs al guardarlo en Supabase. La hora que llega (input.hora) ya es
         // hora argentina; se arma el ISO sin sufijo timezone para que no haya
         // conversión en ningún paso.
-        const [startH, startM] = input.hora.split(':').map(Number);
+        // Normalizar hora a HH:MM (maneja "13:00" y "13:00:00")
+        const horaNorm = input.hora.split(':').slice(0, 2).join(':');
+        const [startH, startM] = horaNorm.split(':').map(Number);
         const totalMinutes = startH * 60 + startM + d;
         const endH = Math.floor(totalMinutes / 60) % 24;
         const endM = totalMinutes % 60;
         const pad = (n: number) => String(n).padStart(2, '0');
-        const startStr = `${input.fecha}T${input.hora}:00`;
+        const startStr = `${input.fecha}T${horaNorm}:00`;
         const endStr = `${input.fecha}T${pad(endH)}:${pad(endM)}:00`;
+        console.log('[BOT] crear_turno datetime:', { fecha: input.fecha, hora: input.hora, horaNorm, startStr, endStr });
         // BUG 2 fix: validar que no exista ya un turno en el mismo horario
         // para el mismo negocio antes de crear uno nuevo.
         const fechaInicioISO = startStr;

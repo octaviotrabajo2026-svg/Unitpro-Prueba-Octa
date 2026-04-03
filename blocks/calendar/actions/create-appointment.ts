@@ -317,10 +317,16 @@ async function createGoogleCalendarEvent(
     const calendar = google.calendar({ version: 'v3', auth })
 
     // Validar disponibilidad antes de crear
+    // Google Calendar events.list requiere timeMin/timeMax en RFC3339 con offset.
+    // Si el string no tiene Z ni offset, se agrega -03:00 (Argentina).
+    function toRFC3339WithOffset(dt: string): string {
+      if (/Z$/.test(dt) || /[+-]\d{2}:\d{2}$/.test(dt)) return dt;
+      return `${dt}-03:00`;
+    }
     const conflictCheck = await calendar.events.list({
       calendarId: 'primary',
-      timeMin: bookingData.start,
-      timeMax: bookingData.end,
+      timeMin: toRFC3339WithOffset(bookingData.start),
+      timeMax: toRFC3339WithOffset(bookingData.end),
       singleEvents: true,
       timeZone: 'America/Argentina/Buenos_Aires',
     })
@@ -369,6 +375,11 @@ async function createGoogleCalendarEvent(
       bookingData.clientEmail ? `Email: ${bookingData.clientEmail}` : '',
     ].filter(Boolean).join('\n')
 
+    console.log('[CALENDAR] Creating event:', JSON.stringify({
+      start: { dateTime: startLocal, timeZone: 'America/Argentina/Buenos_Aires' },
+      end: { dateTime: endLocal, timeZone: 'America/Argentina/Buenos_Aires' },
+      summary: `Turno: ${clienteNombre}`,
+    }, null, 2));
     const event = await calendar.events.insert({
       calendarId: 'primary',
       // BUG 3 fix: 'none' evita que Google envíe invitaciones/notificaciones
