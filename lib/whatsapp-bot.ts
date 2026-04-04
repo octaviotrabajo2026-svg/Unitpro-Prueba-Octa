@@ -30,11 +30,80 @@ export async function verifyAccess(negocioId: number): Promise<{ allowed: boolea
   } catch { return { allowed: false }; }
 }
 
+// BUG 1 fix: generar mini calendario de los próximos 14 días para que Claude
+// no calcule días de semana por su cuenta.
+function generarCalendario(): string {
+  const lines: string[] = [];
+  const now = new Date();
+  for (let i = 0; i < 14; i++) {
+    const d = new Date(now);
+    d.setDate(d.getDate() + i);
+    const fecha = d.toLocaleDateString('es-AR', {
+      timeZone: 'America/Argentina/Buenos_Aires',
+      year: 'numeric', month: '2-digit', day: '2-digit'
+    });
+    const diaSemana = d.toLocaleDateString('es-AR', {
+      timeZone: 'America/Argentina/Buenos_Aires',
+      weekday: 'long'
+    });
+    const isoDate = d.toLocaleDateString('en-CA', { timeZone: 'America/Argentina/Buenos_Aires' });
+    lines.push(`${diaSemana} ${fecha} (${isoDate})`);
+  }
+  return lines.join('\n');
+}
+
+// BUG 2 fix: detectar si el mensaje del usuario es relevante al negocio.
+// Solo se incrementa el contador off-topic si el mensaje NO es relevante.
+function isRelevantMessage(userMessage: string): boolean {
+  const keywords = [
+    'turno', 'hora', 'fecha', 'reserv', 'cancel', 'corte', 'pelo', 'alisado',
+    'colorado', 'servicio', 'profesional', 'victoria', 'andre', 'lunes', 'martes',
+    'miércoles', 'jueves', 'viernes', 'sábado', 'domingo', 'mañana', 'email',
+    'gmail', 'hotmail', 'yahoo', '@', 'si', 'sí', 'no', 'dale', 'perfecto',
+    'quiero', 'necesito', 'puede', 'disponib', 'horario', 'precio', 'cuanto',
+    'enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto',
+    'septiembre', 'octubre', 'noviembre', 'diciembre', 'hola', 'buenas',
+    'ok', 'okey', 'claro', 'bien', 'gracias', 'genial', 'listo', 'confirmado',
+  ];
+  const lower = userMessage.toLowerCase();
+  return keywords.some(kw => lower.includes(kw));
+}
+
 const TOOLS: Anthropic.Tool[] = [
   { name: 'listar_servicios', description: 'Lista servicios del negocio.', input_schema: { type: 'object' as const, properties: {}, required: [] } },
   { name: 'listar_profesionales', description: 'Lista profesionales para un servicio.', input_schema: { type: 'object' as const, properties: { servicio: { type: 'string' } }, required: ['servicio'] } },
-  { name: 'consultar_disponibilidad', description: 'Horarios libres para una fecha.', input_schema: { type: 'object' as const, properties: { fecha: { type: 'string' }, servicio: { type: 'string' }, worker_id: { type: 'string' } }, required: ['fecha', 'servicio'] } },
-  { name: 'crear_turno', description: 'Crea turno con TODOS los datos.', input_schema: { type: 'object' as const, properties: { servicio: { type: 'string' }, worker_id: { type: 'string' }, worker_name: { type: 'string' }, fecha: { type: 'string' }, hora: { type: 'string' }, nombre_cliente: { type: 'string' }, email_cliente: { type: 'string' } }, required: ['servicio', 'fecha', 'hora', 'nombre_cliente', 'email_cliente'] } },
+  {
+    name: 'consultar_disponibilidad',
+    description: 'Horarios libres para una fecha. Para múltiples servicios, pasar todos en "servicios" array para calcular duración total.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        fecha: { type: 'string', description: 'Fecha YYYY-MM-DD' },
+        servicio: { type: 'string', description: 'Servicio único (si es uno solo)' },
+        servicios: { type: 'array', items: { type: 'string' }, description: 'Lista de servicios para calcular duración total' },
+        worker_id: { type: 'string' },
+      },
+      required: ['fecha'],
+    },
+  },
+  {
+    name: 'crear_turno',
+    description: 'Crea turno con TODOS los datos. Para múltiples servicios usar "servicios" (array). Para uno solo usar "servicio" (string).',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        servicios: { type: 'array', items: { type: 'string' }, description: 'Lista de servicios. Usar cuando hay 2 o más. Ej: ["Corte de pelo", "Alisado"]' },
+        servicio: { type: 'string', description: 'Servicio único (si es solo uno)' },
+        worker_id: { type: 'string' },
+        worker_name: { type: 'string' },
+        fecha: { type: 'string' },
+        hora: { type: 'string' },
+        nombre_cliente: { type: 'string' },
+        email_cliente: { type: 'string' },
+      },
+      required: ['fecha', 'hora', 'nombre_cliente', 'email_cliente'],
+    },
+  },
   { name: 'cancelar_turno', description: 'Cancela turno del cliente.', input_schema: { type: 'object' as const, properties: {}, required: [] } },
   { name: 'consultar_mi_turno', description: 'Proximo turno del cliente.', input_schema: { type: 'object' as const, properties: {}, required: [] } },
 ];
@@ -57,31 +126,30 @@ function buildPrompt(ctx: NegocioCtx, phone: string): string {
   const dias = ['Domingo','Lunes','Martes','Miercoles','Jueves','Viernes','Sabado'];
   const sch = Object.entries(ctx.schedule).map(([d,c]: [string,any]) => { if (!c?.isOpen) return `${dias[Number(d)]}: Cerrado`; const r = c.ranges?.map((x:any)=>`${x.start}-${x.end}`).join(', ')||'09:00-18:00'; return `${dias[Number(d)]}: ${r}`; }).join('\n');
 
-  // BUG 4 Fix D: calcular el día de semana por código, no dejárselo a Claude.
   const now = new Date();
+  const hoyISO = now.toLocaleDateString('en-CA', { timeZone: 'America/Argentina/Buenos_Aires' });
   const hoyDia = now.toLocaleDateString('es-AR', { weekday: 'long', timeZone: 'America/Argentina/Buenos_Aires' });
   const hoyFecha = now.toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit', year: 'numeric', timeZone: 'America/Argentina/Buenos_Aires' });
-  const hoyISO = now.toLocaleDateString('en-CA', { timeZone: 'America/Argentina/Buenos_Aires' }); // YYYY-MM-DD
+
+  // BUG 1 fix: mini calendario para que Claude no calcule días de semana.
+  const calendario = generarCalendario();
 
   let extra = '';
   if (ctx.bookingConfig.requireManualConfirmation) extra += '\nNegocio con confirmacion manual.';
   if (ctx.bookingConfig.requestDeposit) extra += `\nPide senia del ${ctx.bookingConfig.depositPercentage||50}%.`;
 
-  const manana = new Date(now);
-  manana.setDate(manana.getDate() + 1);
-  const mananaFecha = manana.toLocaleDateString('es-AR', { weekday: 'long', day: '2-digit', month: '2-digit', year: 'numeric', timeZone: 'America/Argentina/Buenos_Aires' });
-
-  const pasado = new Date(now);
-  pasado.setDate(pasado.getDate() + 2);
-  const pasadoFecha = pasado.toLocaleDateString('es-AR', { weekday: 'long', day: '2-digit', month: '2-digit', year: 'numeric', timeZone: 'America/Argentina/Buenos_Aires' });
-
-  // BUG 4 Fix A: regla crítica sobre cálculo de días de semana.
   const reglaDias = `
-REGLA CRITICA DE FECHAS:
-- HOY es ${hoyDia} ${hoyISO} (${hoyFecha}).
-- "mañana": ${mananaFecha}. "pasado mañana": ${pasadoFecha}.
-- Otro dia de la semana: pedí la fecha exacta. NUNCA calcules fechas futuras.
-- Solo llamá consultar_disponibilidad con fecha numérica exacta (ej: "2026-04-06").`;
+CALENDARIO (próximos 14 días - usá SOLO este calendario para fechas):
+${calendario}
+
+REGLAS DE FECHAS:
+1. Usá ÚNICAMENTE este calendario para resolver fechas. NO calcules días de semana por tu cuenta.
+2. Si el cliente dice "el martes", buscá en el calendario cuál es el próximo martes y usá esa fecha. NO preguntes confirmación.
+3. Si el cliente dice "martes 7 de abril", verificá en el calendario. Si coincide, usá esa fecha. Si NO coincide, decile: "El 7 de abril es [día real]. ¿Querés el [día real] 7 de abril o el martes [fecha del martes]?"
+4. Si el cliente da solo una fecha numérica ("el 9 de abril"), buscala en el calendario y usá el día que corresponda. NO pidas confirmación.
+5. Si el cliente dice "mañana", usá la segunda línea del calendario.
+6. NUNCA digas que una fecha "puede ser en diferentes años". Siempre es 2026.
+7. Una vez que tengas la fecha, llamá a consultar_disponibilidad INMEDIATAMENTE con el formato YYYY-MM-DD. No pidas más confirmación.`;
 
   // BUG 3 fix: regla para evitar que el bot cree un turno nuevo cuando el
   // cliente quiere modificar datos después de haber confirmado uno.
@@ -89,7 +157,13 @@ REGLA CRITICA DE FECHAS:
 REGLA CRITICA - TURNOS DUPLICADOS:
 Si el turno ya fue confirmado y el cliente quiere cambiar datos, NO crees turno nuevo. Decile que contacte al negocio para modificar. NUNCA crees dos turnos para el mismo horario.`;
 
-  return `Sos el asistente de "${name}" por WhatsApp.\n\nSERVICIOS:\n${svcs}\n${team?`\nEQUIPO:\n${team}`:'\nSin equipo.'}\n\nHORARIOS:\n${sch||'No config'}${extra}\n\nREGLAS:\n- Espaniol argentino, conciso, emojis moderados.\n- Tel cliente: ${phone}. NO pedirlo.\n- Flujo: servicio->profesional->fecha->horario->nombre->email->confirmar.\n- HOY es ${hoyDia} ${hoyISO} (${hoyFecha}).\n- 1 profesional = seleccionar auto. Sin equipo = no preguntar.\n- Confirmar con resumen antes de crear.\n${reglaDias}${reglaTurnosDuplicados}`;
+  const reglaMultiServicio = `
+REGLA MULTI-SERVICIO:
+Si el cliente quiere múltiples servicios, agendalo en UN SOLO turno con la duración sumada.
+Usá el campo "servicios" (array) al llamar a crear_turno. Ejemplo: ["Corte de pelo", "Alisado"].
+Para consultar_disponibilidad con múltiples servicios, también usá el campo "servicios" array.`;
+
+  return `Sos el asistente de "${name}" por WhatsApp.\n\nSERVICIOS:\n${svcs}\n${team?`\nEQUIPO:\n${team}`:'\nSin equipo.'}\n\nHORARIOS:\n${sch||'No config'}${extra}\n\nREGLAS:\n- Espaniol argentino, conciso, emojis moderados.\n- Tel cliente: ${phone}. NO pedirlo.\n- Flujo: servicio->profesional->fecha->horario->nombre->email->confirmar.\n- HOY es ${hoyDia} ${hoyISO} (${hoyFecha}).\n- 1 profesional = seleccionar auto. Sin equipo = no preguntar.\n- Confirmar con resumen antes de crear.\n${reglaDias}${reglaTurnosDuplicados}${reglaMultiServicio}`;
 }
 
 async function getConv(nid: number, phone: string) {
@@ -118,16 +192,12 @@ async function runTool(name: string, input: any, ctx: NegocioCtx, phone: string)
         return JSON.stringify({success:true,profesionales:p.map(w=>({id:w.id,nombre:w.nombre}))});
       }
       case 'consultar_disponibilidad': {
-        // BUG 4 Fix B: calcular día de semana por código para que Claude lo use
-        // en lugar de calcularlo por su cuenta.
         const fechaObj = new Date(input.fecha + 'T00:00:00');
         const diaSemana = fechaObj.toLocaleDateString('es-AR', { weekday: 'long' });
 
-        // BUG 4 Fix C: validar que la fecha caiga en un día laborable según la
-        // configuración del negocio, antes de consultar disponibilidad en Google.
         const diasAbiertos = Object.entries(ctx.schedule)
           .filter(([, c]: [string, any]) => c?.isOpen)
-          .map(([d]) => Number(d)); // 0=Dom, 1=Lun, ..., 6=Sab
+          .map(([d]) => Number(d));
 
         if (diasAbiertos.length > 0 && !diasAbiertos.includes(fechaObj.getDay())) {
           const nombresDiasAbiertos = diasAbiertos.map(n =>
@@ -141,16 +211,45 @@ async function runTool(name: string, input: any, ctx: NegocioCtx, phone: string)
           });
         }
 
+        // BUG 3 fix: calcular duración total si vienen múltiples servicios
+        const serviciosList: string[] = input.servicios || (input.servicio ? [input.servicio] : []);
+        let duracionTotal = 0;
+        for (const servicioName of serviciosList) {
+          const serv = ctx.servicios.find((s: any) =>
+            s.titulo.toLowerCase().includes(servicioName.toLowerCase()) ||
+            servicioName.toLowerCase().includes(s.titulo.toLowerCase())
+          );
+          duracionTotal += serv?.duracion || 0;
+        }
+        if (duracionTotal === 0) {
+          const svc = ctx.servicios.find((s: any) => s.titulo.toLowerCase() === (input.servicio || '').toLowerCase());
+          duracionTotal = svc?.duracion || 60;
+        }
+
         const {checkAvailability}=await import('@/blocks/calendar/actions/check-availability');
         const r=await checkAvailability(ctx.slug,input.fecha,input.worker_id);
         if(!r.success) return JSON.stringify({success:false,fecha:input.fecha,dia_semana:diaSemana,error:(r as any).error});
         if(!('busy' in r)) return JSON.stringify({success:false,fecha:input.fecha,dia_semana:diaSemana,error:'Error al verificar disponibilidad'});
-        const svc=ctx.servicios.find(s=>s.titulo.toLowerCase()===(input.servicio||'').toLowerCase());
-        let ws; if(input.worker_id&&ctx.configWeb.equipo?.scheduleType==='per_worker'){const w=ctx.equipo.find(x=>x.id===input.worker_id);ws=w?.schedule;}
-        const slots=generateTimeSlots({date:input.fecha,serviceDuration:svc?.duracion||60,schedule:ctx.schedule,busySlots:r.busy,workerSchedule:ws});
+
+        // BUG 4 fix: incluir turnos de Supabase (pendientes no están en Google Calendar)
+        const { data: turnosSupabase } = await supabaseAdmin
+          .from('turnos')
+          .select('fecha_inicio, fecha_fin')
+          .eq('negocio_id', ctx.negocio.id)
+          .in('estado', ['confirmado', 'pendiente', 'esperando_senia'])
+          .gte('fecha_inicio', `${input.fecha}T00:00:00-03:00`)
+          .lte('fecha_inicio', `${input.fecha}T23:59:59-03:00`);
+
+        const busySlotsSupabase = (turnosSupabase || []).map((t: any) => ({
+          start: t.fecha_inicio,
+          end: t.fecha_fin,
+        }));
+
+        const allBusySlots = [...r.busy, ...busySlotsSupabase];
+
+        let ws; if(input.worker_id&&ctx.configWeb.equipo?.scheduleType==='per_worker'){const w=ctx.equipo.find((x: any)=>x.id===input.worker_id);ws=w?.schedule;}
+        const slots=generateTimeSlots({date:input.fecha,serviceDuration:duracionTotal,schedule:ctx.schedule,busySlots:allBusySlots,workerSchedule:ws});
         const av=slots.filter(s=>s.available).map(s=>s.time);
-        // BUG 4 Fix B: incluir dia_semana en la respuesta para que Claude lo use
-        // directamente sin necesidad de calcularlo.
         return JSON.stringify({
           success: true,
           fecha: input.fecha,
@@ -161,25 +260,43 @@ async function runTool(name: string, input: any, ctx: NegocioCtx, phone: string)
         });
       }
       case 'crear_turno': {
-        const svc=ctx.servicios.find(s=>s.titulo.toLowerCase()===input.servicio.toLowerCase());
-        const d=svc?.duracion||60;
-        // BUG 1 fix: construir el datetime como string puro sin pasar por new
-        // Date() + toISOString(), que en Vercel (UTC) introduciría un offset de
-        // 3hs al guardarlo en Supabase. La hora que llega (input.hora) ya es
-        // hora argentina; se arma el ISO sin sufijo timezone para que no haya
-        // conversión en ningún paso.
-        // Normalizar hora a HH:MM (maneja "13:00" y "13:00:00")
+        // BUG 3 fix: resolver servicios desde array "servicios" o string "servicio"
+        const serviciosList: string[] = input.servicios || (input.servicio ? [input.servicio] : []);
+        if (serviciosList.length === 0) {
+          return JSON.stringify({ success: false, error: 'No se especificó ningún servicio.' });
+        }
+
+        let duracionTotal = 0;
+        let precioTotal = 0;
+        const serviciosInfo: string[] = [];
+        for (const servicioName of serviciosList) {
+          const serv = ctx.servicios.find((s: any) =>
+            s.titulo.toLowerCase().includes(servicioName.toLowerCase()) ||
+            servicioName.toLowerCase().includes(s.titulo.toLowerCase())
+          );
+          if (serv) {
+            duracionTotal += serv.duracion || 30;
+            precioTotal += serv.precio || 0;
+            serviciosInfo.push(serv.titulo);
+          } else {
+            duracionTotal += 30;
+            serviciosInfo.push(servicioName);
+          }
+        }
+        if (duracionTotal === 0) duracionTotal = 30;
+
+        const servicioDisplay = serviciosInfo.join(' + ');
+
         const horaNorm = input.hora.split(':').slice(0, 2).join(':');
         const [startH, startM] = horaNorm.split(':').map(Number);
-        const totalMinutes = startH * 60 + startM + d;
+        const totalMinutes = startH * 60 + startM + duracionTotal;
         const endH = Math.floor(totalMinutes / 60) % 24;
         const endM = totalMinutes % 60;
         const pad = (n: number) => String(n).padStart(2, '0');
         const startStr = `${input.fecha}T${horaNorm}:00-03:00`;
         const endStr = `${input.fecha}T${pad(endH)}:${pad(endM)}:00-03:00`;
-        console.log('[BOT] crear_turno datetime:', { fecha: input.fecha, hora: input.hora, horaNorm, startStr, endStr });
-        // BUG 2 fix: validar que no exista ya un turno en el mismo horario
-        // para el mismo negocio antes de crear uno nuevo.
+        console.log('[BOT] crear_turno datetime:', { fecha: input.fecha, hora: input.hora, horaNorm, startStr, endStr, servicios: serviciosInfo, duracionTotal });
+
         const fechaInicioISO = startStr;
         const { data: turnoExistente } = await supabaseAdmin
           .from('turnos')
@@ -191,11 +308,19 @@ async function runTool(name: string, input: any, ctx: NegocioCtx, phone: string)
         if (turnoExistente) {
           return JSON.stringify({ success: false, error: 'Ya hay un turno reservado para ese horario. Por favor elegí otro horario disponible.' });
         }
+
         const {createAppointment}=await import('@/blocks/calendar/actions/create-appointment');
-        // El bot ya envía su propio mensaje de confirmación, por lo que se
-        // omite el canal WhatsApp en el sistema de notificaciones para evitar
-        // que el cliente reciba dos mensajes. El email sigue enviándose.
-        const res=await createAppointment(ctx.slug,{service:input.servicio,start:startStr,end:endStr,clientName:input.nombre_cliente,clientPhone:phone,clientEmail:input.email_cliente,workerId:input.worker_id,workerName:input.worker_name,skipWhatsAppNotification:true});
+        const res=await createAppointment(ctx.slug,{
+          service: servicioDisplay,
+          start: startStr,
+          end: endStr,
+          clientName: input.nombre_cliente,
+          clientPhone: phone,
+          clientEmail: input.email_cliente,
+          workerId: input.worker_id,
+          workerName: input.worker_name,
+          skipWhatsAppNotification: true,
+        });
         return JSON.stringify({success:res.success,pendiente:res.pending||false,error:res.error});
       }
       case 'cancelar_turno': {
@@ -261,9 +386,10 @@ export async function handleWhatsAppMessage(negocioId: number, phone: string, te
     if (reply) { await saveConv(conv.id, [...msgs, { role: 'assistant', content: reply }], conv.draft, conv.stage); }
 
     // Actualizar off_topic_count en la fila activa
+    // BUG 2 fix: solo incrementar si el mensaje no es relevante al negocio Y no se usaron tools.
     const rowId = conv.id.startsWith('tmp-') ? (cooldownRow?.id || null) : conv.id;
     if (rowId && !String(rowId).startsWith('tmp-')) {
-      if (!usedAnyTool) {
+      if (!usedAnyTool && !isRelevantMessage(text)) {
         const currentCount = (cooldownRow?.off_topic_count || 0) + 1;
         const updates: Record<string, any> = { off_topic_count: currentCount };
         if (currentCount >= 3) {
