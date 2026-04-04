@@ -10,7 +10,7 @@ const MAX_HISTORY = 8;
 
 const supabaseAdmin = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
 
-interface ConvMessage { role: 'user' | 'assistant'; content: string; timestamp?: string; }
+interface ConvMessage { role: 'user' | 'assistant'; content: string; }
 
 export function resolveNegocioFromInstance(instanceName: string): number | null {
   if (!instanceName) return null;
@@ -239,7 +239,7 @@ export async function handleWhatsAppMessage(negocioId: number, phone: string, te
   }
 
   const conv = await getConv(negocioId, phone);
-  const msgs: ConvMessage[] = [...conv.messages, { role: 'user', content: text, timestamp: new Date().toISOString() }];
+  const msgs: ConvMessage[] = [...conv.messages, { role: 'user', content: text }];
   const cm: Anthropic.MessageParam[] = msgs.map(m => ({ role: m.role, content: m.content }));
   if (senderName && !conv.draft?.clientName) cm[cm.length-1] = { role: 'user', content: `[Nombre: ${senderName}]\n\n${text}` };
   try {
@@ -258,7 +258,7 @@ export async function handleWhatsAppMessage(negocioId: number, phone: string, te
       r = await anthropic.messages.create({ model: MODEL, max_tokens: MAX_TOKENS, system: buildPrompt(ctx, phone), tools: TOOLS, messages: cm });
     }
     const reply = r.content.find((b): b is Anthropic.TextBlock => b.type === 'text')?.text || '';
-    if (reply) { await saveConv(conv.id, [...msgs, { role: 'assistant', content: reply, timestamp: new Date().toISOString() }], conv.draft, conv.stage); }
+    if (reply) { await saveConv(conv.id, [...msgs, { role: 'assistant', content: reply }], conv.draft, conv.stage); }
 
     // Actualizar off_topic_count en la fila activa
     const rowId = conv.id.startsWith('tmp-') ? (cooldownRow?.id || null) : conv.id;
