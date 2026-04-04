@@ -3,16 +3,22 @@
 // Panel de administración del Chatbot WhatsApp.
 // Muestra stats, toggle de activación y conversaciones recientes (últimas 24hs).
 
-import { useState, useEffect } from 'react';
-import { Bot, MessageCircle, TrendingUp, Users } from 'lucide-react';
+import { useState, useEffect, useRef } from 'react';
+import { Bot, MessageCircle, TrendingUp, Users, X } from 'lucide-react';
 import type { BlockAdminProps } from '@/types/blocks';
 import { createClient } from '@/lib/supabase';
+
+interface ConversationMessage {
+  role: 'user' | 'assistant';
+  content: string;
+}
 
 interface ConversationPreview {
   id: string;
   phone_number: string;
-  messages: Array<{ role: string; content: string }>;
+  messages: ConversationMessage[];
   updated_at: string;
+  cooldown_until: string | null;
 }
 
 interface Stats {
@@ -21,11 +27,102 @@ interface Stats {
   avgMessages: number;
 }
 
+function maskPhone(phone: string): string {
+  if (!phone || phone.length < 6) return phone || 'Sin número';
+  return phone.slice(0, 6) + '****' + phone.slice(-3);
+}
+
+function formatDateTime(iso: string): string {
+  return new Date(iso).toLocaleString('es-AR', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+function ChatViewer({
+  conversation,
+  onClose,
+}: {
+  conversation: ConversationPreview;
+  onClose: () => void;
+}) {
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const messages = conversation.messages || [];
+
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, []);
+
+  return (
+    <div
+      className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"
+      onClick={onClose}
+    >
+      <div
+        className="bg-white rounded-xl w-full max-w-lg h-[80vh] flex flex-col shadow-xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="p-4 border-b border-zinc-200 flex items-center justify-between shrink-0">
+          <div>
+            <p className="font-semibold text-zinc-900">
+              {maskPhone(conversation.phone_number)}
+            </p>
+            <p className="text-xs text-zinc-500 mt-0.5">
+              {formatDateTime(conversation.updated_at)} · {messages.length} mensajes
+            </p>
+          </div>
+          <button
+            onClick={onClose}
+            className="p-1.5 rounded-lg text-zinc-400 hover:text-zinc-600 hover:bg-zinc-100 transition-colors"
+            aria-label="Cerrar"
+          >
+            <X size={18} />
+          </button>
+        </div>
+
+        {/* Chat messages */}
+        <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-zinc-50">
+          {messages.length === 0 ? (
+            <div className="flex items-center justify-center h-full">
+              <p className="text-sm text-zinc-400">Sin mensajes registrados</p>
+            </div>
+          ) : (
+            messages.map((msg, i) => (
+              <div
+                key={i}
+                className={`flex ${msg.role === 'user' ? 'justify-start' : 'justify-end'}`}
+              >
+                <div
+                  className={`max-w-[80%] rounded-2xl px-3 py-2 text-sm leading-relaxed ${
+                    msg.role === 'user'
+                      ? 'bg-white border border-zinc-200 text-zinc-800 rounded-tl-sm'
+                      : 'bg-green-100 border border-green-200 text-zinc-800 rounded-tr-sm'
+                  }`}
+                >
+                  {msg.content.split(/\*\*(.+?)\*\*/g).map((part, j) =>
+                    j % 2 === 1 ? <strong key={j}>{part}</strong> : part
+                  )}
+                </div>
+              </div>
+            ))
+          )}
+          <div ref={messagesEndRef} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function ChatbotAdmin({ negocio }: BlockAdminProps) {
   const [enabled, setEnabled] = useState(false);
   const [loading, setLoading] = useState(false);
   const [conversations, setConversations] = useState<ConversationPreview[]>([]);
   const [stats, setStats] = useState<Stats>({ today: 0, total: 0, avgMessages: 0 });
+  const [selectedConversation, setSelectedConversation] = useState<ConversationPreview | null>(null);
 
   // Leer estado inicial desde config_web
   useEffect(() => {
@@ -39,13 +136,10 @@ export default function ChatbotAdmin({ negocio }: BlockAdminProps) {
     const supabase = createClient();
     const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
 
-    // BUG 4 fix: el bot actualiza 'updated_at', no 'last_activity'. Se corrige
-    // la columna en el filtro y el select para que las conversaciones recientes
-    // aparezcan correctamente.
     const [{ data: recent }, { data: allConvs }] = await Promise.all([
       supabase
         .from('whatsapp_conversations')
-        .select('id, phone_number, messages, updated_at')
+        .select('id, phone_number, messages, updated_at, cooldown_until')
         .eq('negocio_id', negocio.id)
         .gte('updated_at', yesterday)
         .order('updated_at', { ascending: false })
@@ -215,37 +309,55 @@ export default function ChatbotAdmin({ negocio }: BlockAdminProps) {
         ) : (
           <div className="space-y-2">
             {conversations.map((conv) => {
-              const lastMsg = conv.messages?.[conv.messages.length - 1];
+              const firstUserMsg = conv.messages?.find((m) => m.role === 'user');
               const timeAgo = new Date(conv.updated_at).toLocaleTimeString('es-AR', {
                 hour: '2-digit',
                 minute: '2-digit',
               });
+              const hasCooldown =
+                conv.cooldown_until && new Date(conv.cooldown_until) > new Date();
               return (
-                <div
+                <button
                   key={conv.id}
-                  className="p-3 bg-white rounded-lg border border-zinc-200"
+                  onClick={() => setSelectedConversation(conv)}
+                  className="w-full text-left p-3 bg-white rounded-lg border border-zinc-200 hover:border-zinc-300 hover:bg-zinc-50 transition-colors cursor-pointer"
                 >
                   <div className="flex items-center justify-between mb-1">
-                    <span className="text-sm font-medium text-zinc-800">
-                      {conv.phone_number}
-                    </span>
+                    <div className="flex items-center gap-2">
+                      <MessageCircle size={14} className="text-zinc-400 shrink-0" />
+                      <span className="text-sm font-medium text-zinc-800">
+                        {maskPhone(conv.phone_number)}
+                      </span>
+                      {hasCooldown && (
+                        <span className="text-xs bg-amber-100 text-amber-700 border border-amber-200 px-1.5 py-0.5 rounded-full">
+                          En pausa
+                        </span>
+                      )}
+                    </div>
                     <span className="text-xs text-zinc-400">{timeAgo}</span>
                   </div>
-                  {lastMsg && (
-                    <p className="text-xs text-zinc-500 truncate">
-                      {lastMsg.role === 'user' ? '👤 ' : '🤖 '}
-                      {lastMsg.content}
+                  {firstUserMsg && (
+                    <p className="text-xs text-zinc-500 truncate pl-5">
+                      {firstUserMsg.content}
                     </p>
                   )}
-                  <p className="text-xs text-zinc-400 mt-1">
+                  <p className="text-xs text-zinc-400 mt-1 pl-5">
                     {conv.messages?.length || 0} mensajes
                   </p>
-                </div>
+                </button>
               );
             })}
           </div>
         )}
       </div>
+
+      {/* Chat Viewer Modal */}
+      {selectedConversation && (
+        <ChatViewer
+          conversation={selectedConversation}
+          onClose={() => setSelectedConversation(null)}
+        />
+      )}
     </div>
   );
 }
