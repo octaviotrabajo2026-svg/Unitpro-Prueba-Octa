@@ -261,9 +261,36 @@ async function runTool(name: string, input: any, ctx: NegocioCtx, phone: string)
 
         const allBusySlots = [...r.busy, ...busySlotsSupabase];
 
+        // Convertir busy slots ISO (con cualquier offset) a hora argentina local para filtrar correctamente
+        function isoToArgentinaTime(isoString: string): string {
+          const date = new Date(isoString);
+          return date.toLocaleTimeString('es-AR', {
+            hour: '2-digit',
+            minute: '2-digit',
+            hour12: false,
+            timeZone: 'America/Argentina/Buenos_Aires',
+          });
+        }
+
+        const busyRanges = allBusySlots.map(slot => ({
+          start: isoToArgentinaTime(slot.start),
+          end: isoToArgentinaTime(slot.end),
+        }));
+
+        console.log('[DISPONIBILIDAD] Busy ranges (hora argentina):', JSON.stringify(busyRanges));
+
+        function isSlotBusy(slotTime: string, ranges: { start: string; end: string }[]): boolean {
+          for (const range of ranges) {
+            if (slotTime >= range.start && slotTime < range.end) {
+              return true;
+            }
+          }
+          return false;
+        }
+
         let ws; if(input.worker_id&&ctx.configWeb.equipo?.scheduleType==='per_worker'){const w=ctx.equipo.find((x: any)=>x.id===input.worker_id);ws=w?.schedule;}
         const slots=generateTimeSlots({date:input.fecha,serviceDuration:duracionTotal,schedule:ctx.schedule,busySlots:allBusySlots,workerSchedule:ws});
-        const av=slots.filter(s=>s.available).map(s=>s.time);
+        const av=slots.filter(s=>s.available).map(s=>s.time).filter(slot => !isSlotBusy(slot, busyRanges));
         return JSON.stringify({
           success: true,
           fecha: input.fecha,
