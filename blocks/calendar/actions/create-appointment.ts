@@ -141,66 +141,32 @@ export async function createAppointment(
     }
 
     // ═══ 6. GUARDAR EN SUPABASE ═══════════════════════════════════════════════
-    // Buscar si el cliente ya existe (por email)
+    // Siempre se inserta un turno nuevo. Un cliente puede tener múltiples turnos
+    // simultáneos y no se debe reemplazar ninguno existente.
     let turnoId: string | null = null
 
-    if (emailNormalizado) {
-      const { data: turnosExistentes } = await supabase
-        .from('turnos')
-        .select('id')
-        .eq('negocio_id', negocio.id)
-        .ilike('cliente_email', emailNormalizado)
-        .limit(1)
+    const { data: nuevoTurno, error: insertError } = await supabase
+      .from('turnos')
+      .insert({
+        negocio_id: negocio.id,
+        cliente_nombre: clienteNombreCompleto,
+        cliente_telefono: bookingData.clientPhone,
+        cliente_email: emailNormalizado,
+        servicio: servicioConProfesional,
+        fecha_inicio: bookingData.start,
+        fecha_fin: bookingData.end,
+        mensaje: bookingData.message || null,
+        fotos: bookingData.images || null,
+        estado: estadoInicial,
+        google_event_id: googleEventId,
+        precio_total: precioServicio,
+        recordatorio_enviado: false,
+      })
+      .select('id')
+      .single()
 
-      if (turnosExistentes && turnosExistentes.length > 0) {
-        // Actualizar turno existente
-        const { error: updateError } = await supabase
-          .from('turnos')
-          .update({
-            cliente_nombre: clienteNombreCompleto,
-            cliente_telefono: bookingData.clientPhone,
-            servicio: servicioConProfesional,
-            fecha_inicio: bookingData.start,
-            fecha_fin: bookingData.end,
-            mensaje: bookingData.message || null,
-            fotos: bookingData.images || null,
-            estado: estadoInicial,
-            google_event_id: googleEventId,
-            precio_total: precioServicio,
-            recordatorio_enviado: false,
-          })
-          .eq('id', turnosExistentes[0].id)
-
-        if (updateError) throw updateError
-        turnoId = turnosExistentes[0].id
-      }
-    }
-
-    if (!turnoId) {
-      // Crear nuevo turno
-      const { data: nuevoTurno, error: insertError } = await supabase
-        .from('turnos')
-        .insert({
-          negocio_id: negocio.id,
-          cliente_nombre: clienteNombreCompleto,
-          cliente_telefono: bookingData.clientPhone,
-          cliente_email: emailNormalizado,
-          servicio: servicioConProfesional,
-          fecha_inicio: bookingData.start,
-          fecha_fin: bookingData.end,
-          mensaje: bookingData.message || null,
-          fotos: bookingData.images || null,
-          estado: estadoInicial,
-          google_event_id: googleEventId,
-          precio_total: precioServicio,
-          recordatorio_enviado: false,
-        })
-        .select('id')
-        .single()
-
-      if (insertError) throw insertError
-      turnoId = nuevoTurno.id
-    }
+    if (insertError) throw insertError
+    turnoId = nuevoTurno.id
 
     // ═══ 7. ENVIAR NOTIFICACIONES ═════════════════════════════════════════════
     const { fecha, hora } = formatFechaArgentina(bookingData.start)

@@ -157,13 +157,22 @@ REGLAS DE FECHAS:
 REGLA CRITICA - TURNOS DUPLICADOS:
 Si el turno ya fue confirmado y el cliente quiere cambiar datos, NO crees turno nuevo. Decile que contacte al negocio para modificar. NUNCA crees dos turnos para el mismo horario.`;
 
+  // BUG 1 fix: regla para que el bot nunca reemplace turnos existentes.
+  const reglaMultiplesTurnos = `
+REGLA DE MÚLTIPLES TURNOS:
+- Un cliente puede tener múltiples turnos reservados simultáneamente.
+- Si el cliente pide un turno nuevo (ej: "quiero un turno para el miércoles"), creá un turno NUEVO sin tocar los existentes.
+- Si el cliente pide CAMBIAR o MOVER un turno existente (ej: "quiero cambiar mi turno del lunes al miércoles", "puedo mover mi turno?"), primero cancelá el turno viejo con cancelar_turno y después creá el nuevo con crear_turno.
+- NUNCA cambies un turno existente sin que el cliente lo pida explícitamente.
+- Ante la duda, preguntale: "¿Querés un turno nuevo además del que ya tenés, o querés cambiar el turno del [fecha]?"`;
+
   const reglaMultiServicio = `
 REGLA MULTI-SERVICIO:
 Si el cliente quiere múltiples servicios, agendalo en UN SOLO turno con la duración sumada.
 Usá el campo "servicios" (array) al llamar a crear_turno. Ejemplo: ["Corte de pelo", "Alisado"].
 Para consultar_disponibilidad con múltiples servicios, también usá el campo "servicios" array.`;
 
-  return `Sos el asistente de "${name}" por WhatsApp.\n\nSERVICIOS:\n${svcs}\n${team?`\nEQUIPO:\n${team}`:'\nSin equipo.'}\n\nHORARIOS:\n${sch||'No config'}${extra}\n\nREGLAS:\n- Espaniol argentino, conciso, emojis moderados.\n- Tel cliente: ${phone}. NO pedirlo.\n- Flujo: servicio->profesional->fecha->horario->nombre->email->confirmar.\n- HOY es ${hoyDia} ${hoyISO} (${hoyFecha}).\n- 1 profesional = seleccionar auto. Sin equipo = no preguntar.\n- Confirmar con resumen antes de crear.\n${reglaDias}${reglaTurnosDuplicados}${reglaMultiServicio}`;
+  return `Sos el asistente de "${name}" por WhatsApp.\n\nSERVICIOS:\n${svcs}\n${team?`\nEQUIPO:\n${team}`:'\nSin equipo.'}\n\nHORARIOS:\n${sch||'No config'}${extra}\n\nREGLAS:\n- Espaniol argentino, conciso, emojis moderados.\n- Tel cliente: ${phone}. NO pedirlo.\n- Flujo: servicio->profesional->fecha->horario->nombre->email->confirmar.\n- HOY es ${hoyDia} ${hoyISO} (${hoyFecha}).\n- 1 profesional = seleccionar auto. Sin equipo = no preguntar.\n- Confirmar con resumen antes de crear.\n${reglaDias}${reglaTurnosDuplicados}${reglaMultiplesTurnos}${reglaMultiServicio}`;
 }
 
 async function getConv(nid: number, phone: string) {
@@ -232,7 +241,7 @@ async function runTool(name: string, input: any, ctx: NegocioCtx, phone: string)
         if(!('busy' in r)) return JSON.stringify({success:false,fecha:input.fecha,dia_semana:diaSemana,error:'Error al verificar disponibilidad'});
 
         // BUG 4 fix: incluir turnos de Supabase (pendientes no están en Google Calendar)
-        const { data: turnosSupabase } = await supabaseAdmin
+        const { data: turnosSupabase, error: turnosError } = await supabaseAdmin
           .from('turnos')
           .select('fecha_inicio, fecha_fin')
           .eq('negocio_id', ctx.negocio.id)
@@ -240,10 +249,15 @@ async function runTool(name: string, input: any, ctx: NegocioCtx, phone: string)
           .gte('fecha_inicio', `${input.fecha}T00:00:00-03:00`)
           .lte('fecha_inicio', `${input.fecha}T23:59:59-03:00`);
 
+        console.log('[DISPONIBILIDAD] Turnos encontrados para fecha:', JSON.stringify(turnosSupabase));
+        if (turnosError) console.log('[DISPONIBILIDAD] Error query turnos:', turnosError);
+
         const busySlotsSupabase = (turnosSupabase || []).map((t: any) => ({
           start: t.fecha_inicio,
           end: t.fecha_fin,
         }));
+
+        console.log('[DISPONIBILIDAD] Busy slots de Google Calendar:', JSON.stringify(r.busy));
 
         const allBusySlots = [...r.busy, ...busySlotsSupabase];
 
@@ -321,6 +335,26 @@ async function runTool(name: string, input: any, ctx: NegocioCtx, phone: string)
           workerName: input.worker_name,
           skipWhatsAppNotification: true,
         });
+
+        // BUG 1 fix: limpiar booking_draft después de crear un turno exitoso
+        // para que la próxima reserva del mismo cliente arranque de cero.
+        if (res.success) {
+          const { data: convRow } = await supabaseAdmin
+            .from('whatsapp_conversations')
+            .select('id')
+            .eq('negocio_id', ctx.negocio.id)
+            .eq('phone_number', phone)
+            .order('updated_at', { ascending: false })
+            .limit(1)
+            .maybeSingle();
+          if (convRow?.id) {
+            await supabaseAdmin
+              .from('whatsapp_conversations')
+              .update({ booking_draft: {}, stage: 'idle' })
+              .eq('id', convRow.id);
+          }
+        }
+
         return JSON.stringify({success:res.success,pendiente:res.pending||false,error:res.error});
       }
       case 'cancelar_turno': {
