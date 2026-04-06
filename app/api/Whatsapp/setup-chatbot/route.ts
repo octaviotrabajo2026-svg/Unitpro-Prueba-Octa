@@ -20,13 +20,21 @@ export async function POST(request: NextRequest) {
     // Verificar que el usuario es dueño del negocio solicitado
     const { data: negocio } = await supabase
       .from('negocios')
-      .select('id, config_web')
+      .select('id, config_web, google_calendar_connected')
       .eq('id', negocioId)
       .eq('user_id', user.id)
       .single();
 
     if (!negocio) {
       return NextResponse.json({ error: 'Negocio no encontrado' }, { status: 404 });
+    }
+
+    // Verificación server-side: no permitir activar el chatbot sin Google Calendar conectado
+    if (enabled && !negocio.google_calendar_connected) {
+      return NextResponse.json(
+        { error: 'Google Calendar no conectado. Conectá tu cuenta de Google primero.' },
+        { status: 400 }
+      );
     }
 
     const evolutionUrl = process.env.EVOLUTION_API_URL || 'http://178.104.109.245:8080';

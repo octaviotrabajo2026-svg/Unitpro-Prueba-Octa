@@ -120,7 +120,11 @@ async function loadCtx(id: number): Promise<NegocioCtx | null> {
 }
 
 function buildPrompt(ctx: NegocioCtx, phone: string): string {
-  const name = ctx.configWeb.hero?.titulo || ctx.negocio.nombre || 'el negocio';
+  const chatbotConfig = ctx.configWeb.chatbot || {};
+  const name = chatbotConfig.business_name || ctx.configWeb.hero?.titulo || ctx.negocio.nombre || 'el negocio';
+  const tone: string = chatbotConfig.tone || 'friendly';
+  const additionalInfo: string = chatbotConfig.additional_info || '';
+  const cancellationHours: number = chatbotConfig.cancellation_hours ?? 0;
   const svcs = ctx.servicios.length ? ctx.servicios.map(s => `- ${s.titulo}: $${s.precio || 'Consultar'} (${s.duracion} min)`).join('\n') : 'No hay servicios.';
   const team = ctx.equipo.length ? ctx.equipo.map(w => `- ${w.nombre} (${w.cargo || 'Profesional'}) [ID: ${w.id}]`).join('\n') : '';
   const dias = ['Domingo','Lunes','Martes','Miercoles','Jueves','Viernes','Sabado'];
@@ -172,7 +176,21 @@ Si el cliente quiere múltiples servicios, agendalo en UN SOLO turno con la dura
 Usá el campo "servicios" (array) al llamar a crear_turno. Ejemplo: ["Corte de pelo", "Alisado"].
 Para consultar_disponibilidad con múltiples servicios, también usá el campo "servicios" array.`;
 
-  return `Sos el asistente de "${name}" por WhatsApp.\n\nSERVICIOS:\n${svcs}\n${team?`\nEQUIPO:\n${team}`:'\nSin equipo.'}\n\nHORARIOS:\n${sch||'No config'}${extra}\n\nREGLAS:\n- Espaniol argentino, conciso, emojis moderados.\n- Tel cliente: ${phone}. NO pedirlo.\n- Flujo: servicio->profesional->fecha->horario->nombre->email->confirmar.\n- HOY es ${hoyDia} ${hoyISO} (${hoyFecha}).\n- 1 profesional = seleccionar auto. Sin equipo = no preguntar.\n- Confirmar con resumen antes de crear.\n${reglaDias}${reglaTurnosDuplicados}${reglaMultiplesTurnos}${reglaMultiServicio}`;
+  // Instrucción de tono según configuración del negocio
+  let toneInstruction = '';
+  if (tone === 'formal') toneInstruction = 'Usá "usted", sé profesional y cortés.';
+  else if (tone === 'casual') toneInstruction = 'Sé relajado, podés usar humor cuando sea apropiado.';
+  else toneInstruction = 'Sé amigable, usá "vos", cercano pero profesional.';
+
+  const additionalInfoSection = additionalInfo
+    ? `\nINFO ADICIONAL DEL NEGOCIO:\n${additionalInfo}`
+    : '';
+
+  const cancellationRule = cancellationHours > 0
+    ? `\nCANCELACIÓN: No permitir cancelar con menos de ${cancellationHours} horas de anticipación. Si el cliente intenta cancelar y su turno es en menos de ${cancellationHours} horas, informale que ya no es posible cancelar.`
+    : '';
+
+  return `Sos el asistente de "${name}" por WhatsApp.\n\nSERVICIOS:\n${svcs}\n${team?`\nEQUIPO:\n${team}`:'\nSin equipo.'}\n\nHORARIOS:\n${sch||'No config'}${extra}\n\nREGLAS:\n- Espaniol argentino, conciso, emojis moderados.\n- ${toneInstruction}\n- Tel cliente: ${phone}. NO pedirlo.\n- Flujo: servicio->profesional->fecha->horario->nombre->email->confirmar.\n- HOY es ${hoyDia} ${hoyISO} (${hoyFecha}).\n- 1 profesional = seleccionar auto. Sin equipo = no preguntar.\n- Confirmar con resumen antes de crear.\n${reglaDias}${reglaTurnosDuplicados}${reglaMultiplesTurnos}${reglaMultiServicio}${cancellationRule}${additionalInfoSection}`;
 }
 
 async function getConv(nid: number, phone: string) {

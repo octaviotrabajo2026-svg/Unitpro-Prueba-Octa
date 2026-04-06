@@ -8,6 +8,13 @@ import { Bot, MessageCircle, TrendingUp, Users, X } from 'lucide-react';
 import type { BlockAdminProps } from '@/types/blocks';
 import { createClient } from '@/lib/supabase';
 
+interface ChatbotConfig {
+  business_name?: string;
+  tone?: string;
+  additional_info?: string;
+  cancellation_hours?: number;
+}
+
 interface ConversationMessage {
   role: 'user' | 'assistant';
   content: string;
@@ -130,11 +137,21 @@ export default function ChatbotAdmin({ negocio }: BlockAdminProps) {
   const [conversations, setConversations] = useState<ConversationPreview[]>([]);
   const [stats, setStats] = useState<Stats>({ today: 0, total: 0, avgMessages: 0 });
   const [selectedConversation, setSelectedConversation] = useState<ConversationPreview | null>(null);
+  const [config, setConfig] = useState<ChatbotConfig>({});
+  const [savingConfig, setSavingConfig] = useState(false);
+  const [saveSuccess, setSaveSuccess] = useState(false);
 
   // Leer estado inicial desde config_web
   useEffect(() => {
     const configWeb = negocio.config_web || {};
     setEnabled(configWeb.chatbot?.enabled || false);
+    const chatbotConfig = configWeb.chatbot || {};
+    setConfig({
+      business_name: chatbotConfig.business_name || '',
+      tone: chatbotConfig.tone || 'friendly',
+      additional_info: chatbotConfig.additional_info || '',
+      cancellation_hours: chatbotConfig.cancellation_hours ?? 2,
+    });
     loadConversations();
   }, [negocio.id]);
 
@@ -172,10 +189,53 @@ export default function ChatbotAdmin({ negocio }: BlockAdminProps) {
     }
   }
 
+  /** Guarda la configuración del bot en config_web.chatbot sin cambiar el estado enabled. */
+  async function handleSaveConfig() {
+    setSavingConfig(true);
+    setSaveSuccess(false);
+    try {
+      const supabase = createClient();
+      const currentConfigWeb = (negocio as any).config_web || {};
+      const { error } = await supabase
+        .from('negocios')
+        .update({
+          config_web: {
+            ...currentConfigWeb,
+            chatbot: {
+              ...(currentConfigWeb.chatbot || {}),
+              enabled,
+              business_name: config.business_name,
+              tone: config.tone,
+              additional_info: config.additional_info,
+              cancellation_hours: config.cancellation_hours,
+            },
+          },
+        })
+        .eq('id', negocio.id);
+
+      if (!error) {
+        setSaveSuccess(true);
+        setTimeout(() => setSaveSuccess(false), 3000);
+      }
+    } catch (e) {
+      console.error('[CHATBOT-ADMIN] Error guardando config:', e);
+    } finally {
+      setSavingConfig(false);
+    }
+  }
+
   /** Activa o desactiva el chatbot llamando al endpoint setup-chatbot. */
   async function handleToggle() {
     setLoading(true);
     try {
+      // Solo bloquear al ACTIVAR (no al desactivar)
+      if (!enabled) {
+        if (!(negocio as any).google_calendar_connected) {
+          alert('Para usar el chatbot necesitás conectar Google Calendar primero. Andá a Turnos & Calendario y conectá tu cuenta de Google.');
+          setLoading(false);
+          return;
+        }
+      }
       const configWeb = negocio.config_web || {};
       const instanceName =
         configWeb.chatbot?.instanceName || `negocio_${negocio.id}`;
@@ -254,6 +314,21 @@ export default function ChatbotAdmin({ negocio }: BlockAdminProps) {
         </div>
       )}
 
+      {/* Warning si Google Calendar no está conectado */}
+      {!(negocio as any).google_calendar_connected && (
+        <div className="flex items-start gap-3 p-4 bg-amber-50 border border-amber-200 rounded-xl">
+          <span className="text-amber-500 text-lg" aria-hidden="true">⚠️</span>
+          <div>
+            <p className="text-sm font-medium text-amber-800">
+              Google Calendar no conectado
+            </p>
+            <p className="text-xs text-amber-600 mt-0.5">
+              Andá a Turnos &amp; Calendario y conectá tu cuenta de Google para poder activar el chatbot.
+            </p>
+          </div>
+        </div>
+      )}
+
       {/* Banner de estado activo/inactivo */}
       <div
         className={`p-4 rounded-xl border ${
@@ -300,6 +375,77 @@ export default function ChatbotAdmin({ negocio }: BlockAdminProps) {
           </div>
           <p className="text-2xl font-bold text-zinc-900">{stats.avgMessages}</p>
           <p className="text-xs text-zinc-500 mt-1">Msgs promedio</p>
+        </div>
+      </div>
+
+      {/* Configuración del bot */}
+      <div className="border border-zinc-200 rounded-xl p-4 space-y-4 bg-white">
+        <h3 className="font-semibold text-zinc-800">Configuración del bot</h3>
+
+        <div>
+          <label className="block text-sm font-medium text-zinc-700 mb-1">Nombre del negocio</label>
+          <input
+            type="text"
+            className="w-full border border-zinc-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-zinc-400"
+            placeholder="Ej: Victoria Famea Peluquería Unisex"
+            value={config.business_name || ''}
+            onChange={(e) => setConfig({ ...config, business_name: e.target.value })}
+          />
+          <p className="text-xs text-zinc-400 mt-1">El bot usará este nombre para presentarse</p>
+        </div>
+
+        <div>
+          <label className="block text-sm font-medium text-zinc-700 mb-1">Tono del bot</label>
+          <select
+            className="w-full border border-zinc-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-zinc-400"
+            value={config.tone || 'friendly'}
+            onChange={(e) => setConfig({ ...config, tone: e.target.value })}
+          >
+            <option value="formal">Formal (usted, profesional)</option>
+            <option value="friendly">Amigable (vos, cercano) — Recomendado</option>
+            <option value="casual">Casual (relajado, con humor)</option>
+          </select>
+        </div>
+
+        <div>
+          <label className="block text-sm font-medium text-zinc-700 mb-1">Información adicional</label>
+          <textarea
+            className="w-full border border-zinc-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-zinc-400"
+            rows={3}
+            placeholder="Ej: Aceptamos efectivo y transferencia. Estamos en Calle San Martín 123."
+            value={config.additional_info || ''}
+            onChange={(e) => setConfig({ ...config, additional_info: e.target.value })}
+          />
+          <p className="text-xs text-zinc-400 mt-1">El bot tendrá esta información para responder preguntas</p>
+        </div>
+
+        <div>
+          <label className="block text-sm font-medium text-zinc-700 mb-1">Cancelación mínima (horas antes)</label>
+          <select
+            className="w-full border border-zinc-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-zinc-400"
+            value={config.cancellation_hours ?? 2}
+            onChange={(e) => setConfig({ ...config, cancellation_hours: parseInt(e.target.value) })}
+          >
+            <option value="0">Sin restricción</option>
+            <option value="2">2 horas antes</option>
+            <option value="4">4 horas antes</option>
+            <option value="8">8 horas antes</option>
+            <option value="12">12 horas antes</option>
+            <option value="24">24 horas antes</option>
+          </select>
+        </div>
+
+        <div className="flex items-center gap-3">
+          <button
+            onClick={handleSaveConfig}
+            disabled={savingConfig}
+            className="bg-zinc-900 text-white px-4 py-2 rounded-lg text-sm hover:bg-zinc-800 transition-colors disabled:opacity-50"
+          >
+            {savingConfig ? 'Guardando...' : 'Guardar configuración'}
+          </button>
+          {saveSuccess && (
+            <span className="text-sm text-green-600 font-medium">Guardado correctamente</span>
+          )}
         </div>
       </div>
 
