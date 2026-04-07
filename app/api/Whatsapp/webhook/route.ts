@@ -33,12 +33,10 @@ export async function POST(request: Request) {
     const text = data.message?.conversation || data.message?.extendedTextMessage?.text || null;
     if (!text) return NextResponse.json({ ok: true });
 
-    console.log(`[WEBHOOK] ${phone} -> negocio ${negocioId}: "${text.substring(0, 50)}"`);
     const reply = await handleWhatsAppMessage(negocioId, phone, text, data.pushName);
     if (!reply) return NextResponse.json({ ok: true });
 
     await sendWhatsApp({ to: phone, text: reply, instanceName: instance });
-    console.log(`[WEBHOOK] Respuesta enviada a ${phone}`);
     return NextResponse.json({ ok: true, replied: true });
   } catch (e: any) {
     console.error('[WEBHOOK] Error:', e?.message);

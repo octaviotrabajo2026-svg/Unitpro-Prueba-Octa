@@ -341,11 +341,6 @@ async function createGoogleCalendarEvent(
       bookingData.clientEmail ? `Email: ${bookingData.clientEmail}` : '',
     ].filter(Boolean).join('\n')
 
-    console.log('[CALENDAR] Creating event:', JSON.stringify({
-      start: { dateTime: startLocal, timeZone: 'America/Argentina/Buenos_Aires' },
-      end: { dateTime: endLocal, timeZone: 'America/Argentina/Buenos_Aires' },
-      summary: `Turno: ${clienteNombre}`,
-    }, null, 2));
     const event = await calendar.events.insert({
       calendarId: 'primary',
       // BUG 3 fix: 'none' evita que Google envíe invitaciones/notificaciones

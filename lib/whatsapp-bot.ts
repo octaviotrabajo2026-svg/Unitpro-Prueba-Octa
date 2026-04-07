@@ -267,15 +267,12 @@ async function runTool(name: string, input: any, ctx: NegocioCtx, phone: string)
           .gte('fecha_inicio', `${input.fecha}T00:00:00-03:00`)
           .lte('fecha_inicio', `${input.fecha}T23:59:59-03:00`);
 
-        console.log('[DISPONIBILIDAD] Turnos encontrados para fecha:', JSON.stringify(turnosSupabase));
-        if (turnosError) console.log('[DISPONIBILIDAD] Error query turnos:', turnosError);
 
         const busySlotsSupabase = (turnosSupabase || []).map((t: any) => ({
           start: t.fecha_inicio,
           end: t.fecha_fin,
         }));
 
-        console.log('[DISPONIBILIDAD] Busy slots de Google Calendar:', JSON.stringify(r.busy));
 
         const allBusySlots = [...r.busy, ...busySlotsSupabase];
 
@@ -295,7 +292,6 @@ async function runTool(name: string, input: any, ctx: NegocioCtx, phone: string)
           end: isoToArgentinaTime(slot.end),
         }));
 
-        console.log('[DISPONIBILIDAD] Busy ranges (hora argentina):', JSON.stringify(busyRanges));
 
         function isSlotBusy(slotTime: string, ranges: { start: string; end: string }[]): boolean {
           for (const range of ranges) {
@@ -354,7 +350,6 @@ async function runTool(name: string, input: any, ctx: NegocioCtx, phone: string)
         const pad = (n: number) => String(n).padStart(2, '0');
         const startStr = `${input.fecha}T${horaNorm}:00-03:00`;
         const endStr = `${input.fecha}T${pad(endH)}:${pad(endM)}:00-03:00`;
-        console.log('[BOT] crear_turno datetime:', { fecha: input.fecha, hora: input.hora, horaNorm, startStr, endStr, servicios: serviciosInfo, duracionTotal });
 
         const fechaInicioISO = startStr;
         const { data: turnoExistente } = await supabaseAdmin
@@ -421,11 +416,10 @@ async function runTool(name: string, input: any, ctx: NegocioCtx, phone: string)
 }
 
 export async function handleWhatsAppMessage(negocioId: number, phone: string, text: string, senderName?: string): Promise<string> {
-  console.log(`[BOT] ${phone} -> negocio ${negocioId}`);
   const ctx = await loadCtx(negocioId);
   if (!ctx) return '';
   const { allowed } = await verifyAccess(negocioId);
-  if (!allowed) { console.log('[BOT] Acceso denegado'); return ''; }
+  if (!allowed) { return ''; }
 
   // Verificar cooldown (sin filtro de 2hs para que persista entre conversaciones)
   const { data: cooldownRow } = await supabaseAdmin
@@ -438,7 +432,6 @@ export async function handleWhatsAppMessage(negocioId: number, phone: string, te
     .maybeSingle();
 
   if (cooldownRow?.cooldown_until && new Date(cooldownRow.cooldown_until) > new Date()) {
-    console.log(`[BOT] ${phone} en cooldown hasta ${cooldownRow.cooldown_until}`);
     return '¡Hola! En este momento no puedo asistirte. Escribime cuando necesites agendar un turno y con gusto te ayudo. 😊';
   }
 
@@ -455,7 +448,6 @@ export async function handleWhatsAppMessage(negocioId: number, phone: string, te
       usedAnyTool = true;
       const tb = r.content.find((b): b is Anthropic.ToolUseBlock => b.type === 'tool_use');
       if (!tb) break;
-      console.log(`[BOT] Tool #${i}: ${tb.name}`);
       const tr = await runTool(tb.name, tb.input, ctx, phone);
       cm.push({ role: 'assistant', content: r.content });
       cm.push({ role: 'user', content: [{ type: 'tool_result', tool_use_id: tb.id, content: tr }] });
@@ -473,7 +465,6 @@ export async function handleWhatsAppMessage(negocioId: number, phone: string, te
         const updates: Record<string, any> = { off_topic_count: currentCount };
         if (currentCount >= 3) {
           updates.cooldown_until = new Date(Date.now() + 30 * 60 * 1000).toISOString();
-          console.log(`[BOT] ${phone} alcanzó ${currentCount} mensajes off-topic. Cooldown activado.`);
         }
         await supabaseAdmin.from('whatsapp_conversations').update(updates).eq('id', rowId);
       } else {
