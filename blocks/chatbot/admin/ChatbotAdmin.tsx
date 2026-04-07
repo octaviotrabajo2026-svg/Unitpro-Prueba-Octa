@@ -26,6 +26,7 @@ interface ConversationPreview {
   messages: ConversationMessage[];
   updated_at: string;
   cooldown_until: string | null;
+  client_name: string | null;
 }
 
 interface Stats {
@@ -158,16 +159,16 @@ export default function ChatbotAdmin({ negocio }: BlockAdminProps) {
   /** Carga conversaciones recientes y calcula stats desde Supabase. */
   async function loadConversations() {
     const supabase = createClient();
-    const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    const twoMonthsAgo = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString();
 
     const [{ data: recent }, { data: allConvs }] = await Promise.all([
       supabase
         .from('whatsapp_conversations')
-        .select('id, phone_number, messages, updated_at, cooldown_until')
+        .select('id, phone_number, messages, updated_at, cooldown_until, client_name')
         .eq('negocio_id', negocio.id)
-        .gte('updated_at', yesterday)
+        .gte('updated_at', twoMonthsAgo)
         .order('updated_at', { ascending: false })
-        .limit(20),
+        .limit(50),
       supabase
         .from('whatsapp_conversations')
         .select('id, messages')
@@ -452,7 +453,7 @@ export default function ChatbotAdmin({ negocio }: BlockAdminProps) {
       {/* Conversaciones recientes (últimas 24hs) */}
       <div>
         <h3 className="text-sm font-semibold text-zinc-700 mb-3">
-          Conversaciones recientes (24hs)
+          Conversaciones
         </h3>
         {conversations.length === 0 ? (
           <div className="p-12 text-center bg-white rounded-2xl border border-dashed border-zinc-200">
@@ -479,7 +480,10 @@ export default function ChatbotAdmin({ negocio }: BlockAdminProps) {
                     <div className="flex items-center gap-2">
                       <MessageCircle size={14} className="text-zinc-400 shrink-0" />
                       <span className="text-sm font-medium text-zinc-800">
-                        {maskPhone(conv.phone_number)}
+                        {conv.client_name || maskPhone(conv.phone_number)}
+                        {conv.client_name && (
+                          <span className="text-xs text-zinc-400 ml-2">{maskPhone(conv.phone_number)}</span>
+                        )}
                       </span>
                       {hasCooldown && (
                         <span className="text-xs bg-amber-100 text-amber-700 border border-amber-200 px-1.5 py-0.5 rounded-full">

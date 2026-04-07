@@ -195,18 +195,84 @@ Para consultar_disponibilidad con múltiples servicios, también usá el campo "
 
 async function getConv(nid: number, phone: string) {
   try {
-    const cut = new Date(Date.now()-2*60*60*1000).toISOString();
-    const { data } = await supabaseAdmin.from('whatsapp_conversations').select('*').eq('negocio_id',nid).eq('phone_number',phone).gt('updated_at',cut).order('updated_at',{ascending:false}).limit(1);
-    if (data?.length) return { id: data[0].id, messages: data[0].messages||[], draft: data[0].booking_draft||{}, stage: data[0].stage||'idle' };
-    const { data: c, error } = await supabaseAdmin.from('whatsapp_conversations').insert({negocio_id:nid,phone_number:phone,messages:[],booking_draft:{},stage:'idle'}).select('id').single();
-    if (error||!c) return { id:'tmp-'+Date.now(), messages:[], draft:{}, stage:'idle' };
-    return { id:c.id, messages:[], draft:{}, stage:'idle' };
-  } catch { return { id:'tmp-'+Date.now(), messages:[], draft:{}, stage:'idle' }; }
+    const { data } = await supabaseAdmin
+      .from('whatsapp_conversations')
+      .select('*')
+      .eq('negocio_id', nid)
+      .eq('phone_number', phone)
+      .order('updated_at', { ascending: false })
+      .limit(1);
+
+    if (data?.length) {
+      const conv = data[0];
+      const lastActivity = new Date(conv.updated_at);
+      const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
+      const shouldResetState = lastActivity < twoHoursAgo;
+
+      return {
+        id: conv.id,
+        messages: conv.messages || [],
+        draft: shouldResetState ? {} : (conv.booking_draft || {}),
+        stage: shouldResetState ? 'idle' : (conv.stage || 'idle'),
+      };
+    }
+
+    const { data: c, error } = await supabaseAdmin
+      .from('whatsapp_conversations')
+      .insert({ negocio_id: nid, phone_number: phone, messages: [], booking_draft: {}, stage: 'idle' })
+      .select('id')
+      .single();
+    if (error || !c) return { id: 'tmp-' + Date.now(), messages: [], draft: {}, stage: 'idle' };
+    return { id: c.id, messages: [], draft: {}, stage: 'idle' };
+  } catch {
+    return { id: 'tmp-' + Date.now(), messages: [], draft: {}, stage: 'idle' };
+  }
 }
 
 async function saveConv(id: string, msgs: ConvMessage[], draft: any, stage: string) {
   if (id.startsWith('tmp-')) return;
-  try { await supabaseAdmin.from('whatsapp_conversations').update({messages:msgs.slice(-MAX_HISTORY),booking_draft:draft,stage,updated_at:new Date().toISOString()}).eq('id',id); } catch {}
+  try {
+    await supabaseAdmin
+      .from('whatsapp_conversations')
+      .update({ messages: msgs, booking_draft: draft, stage, updated_at: new Date().toISOString() })
+      .eq('id', id);
+  } catch {}
+}
+
+/** Convierte "HH:MM" a minutos desde medianoche. */
+function timeToMinutes(time: string): number {
+  const [h, m] = time.split(':').map(Number);
+  return h * 60 + m;
+}
+
+/** Convierte minutos desde medianoche a "HH:MM". */
+function minutesToTime(minutes: number): string {
+  return `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`;
+}
+
+/**
+ * Verifica si un slot (en hora argentina "HH:MM") está disponible,
+ * considerando la duración del servicio y el horario de cierre.
+ */
+function isSlotAvailable(
+  slotTime: string,
+  durationMinutes: number,
+  busyRanges: { start: string; end: string }[],
+  closingTime: string
+): boolean {
+  const slotStart = timeToMinutes(slotTime);
+  const slotEnd = slotStart + durationMinutes;
+  const closing = timeToMinutes(closingTime);
+
+  if (slotEnd > closing) return false;
+
+  for (const range of busyRanges) {
+    const busyStart = timeToMinutes(range.start);
+    const busyEnd = timeToMinutes(range.end);
+    if (slotStart < busyEnd && slotEnd > busyStart) return false;
+  }
+
+  return true;
 }
 
 async function runTool(name: string, input: any, ctx: NegocioCtx, phone: string): Promise<string> {
@@ -293,18 +359,22 @@ async function runTool(name: string, input: any, ctx: NegocioCtx, phone: string)
         }));
 
 
-        function isSlotBusy(slotTime: string, ranges: { start: string; end: string }[]): boolean {
-          for (const range of ranges) {
-            if (slotTime >= range.start && slotTime < range.end) {
-              return true;
-            }
-          }
-          return false;
-        }
-
         let ws; if(input.worker_id&&ctx.configWeb.equipo?.scheduleType==='per_worker'){const w=ctx.equipo.find((x: any)=>x.id===input.worker_id);ws=w?.schedule;}
-        const slots=generateTimeSlots({date:input.fecha,serviceDuration:duracionTotal,schedule:ctx.schedule,busySlots:allBusySlots,workerSchedule:ws});
-        const av=slots.filter(s=>s.available).map(s=>s.time).filter(slot => !isSlotBusy(slot, busyRanges));
+
+        // Obtener closing time del día para isSlotAvailable
+        const scheduleToUse = ws || ctx.schedule;
+        const dayKey = String(fechaObj.getDay());
+        const dayConfigForClosing = scheduleToUse[dayKey];
+        const dayRanges = dayConfigForClosing?.ranges || [];
+        const closingTime = dayRanges.length > 0 ? dayRanges[dayRanges.length - 1].end : '18:00';
+
+        // generateTimeSlots SIN busySlots (evita timezone mismatch) — filtra por schedule y duración
+        const slots = generateTimeSlots({ date: input.fecha, serviceDuration: duracionTotal, schedule: ctx.schedule, busySlots: [], workerSchedule: ws });
+
+        // Filtrar con isSlotAvailable usando Argentine time strings (busyRanges ya está convertido)
+        const av = slots.filter(s => s.available).map(s => s.time).filter(slot =>
+          isSlotAvailable(slot, duracionTotal, busyRanges, closingTime)
+        );
         return JSON.stringify({
           success: true,
           fecha: input.fecha,
@@ -343,6 +413,20 @@ async function runTool(name: string, input: any, ctx: NegocioCtx, phone: string)
         const servicioDisplay = serviciosInfo.join(' + ');
 
         const horaNorm = input.hora.split(':').slice(0, 2).join(':');
+
+        // Validar que el turno no exceda el horario de cierre
+        const crearDayKey = String(new Date(input.fecha + 'T00:00:00').getDay());
+        const crearDayConfig = ctx.schedule[crearDayKey];
+        const crearRanges = crearDayConfig?.ranges || [];
+        const crearClosingTime = crearRanges.length > 0 ? crearRanges[crearRanges.length - 1].end : '23:59';
+        const endMinutes = timeToMinutes(horaNorm) + duracionTotal;
+        if (endMinutes > timeToMinutes(crearClosingTime)) {
+          return JSON.stringify({
+            success: false,
+            error: `El turno terminaría a las ${minutesToTime(endMinutes)} pero el negocio cierra a las ${crearClosingTime}. Por favor elegí un horario más temprano.`
+          });
+        }
+
         const [startH, startM] = horaNorm.split(':').map(Number);
         const totalMinutes = startH * 60 + startM + duracionTotal;
         const endH = Math.floor(totalMinutes / 60) % 24;
@@ -390,7 +474,7 @@ async function runTool(name: string, input: any, ctx: NegocioCtx, phone: string)
           if (convRow?.id) {
             await supabaseAdmin
               .from('whatsapp_conversations')
-              .update({ booking_draft: {}, stage: 'idle' })
+              .update({ booking_draft: {}, stage: 'idle', client_name: input.nombre_cliente })
               .eq('id', convRow.id);
           }
         }
@@ -437,7 +521,8 @@ export async function handleWhatsAppMessage(negocioId: number, phone: string, te
 
   const conv = await getConv(negocioId, phone);
   const msgs: ConvMessage[] = [...conv.messages, { role: 'user', content: text }];
-  const cm: Anthropic.MessageParam[] = msgs.map(m => ({ role: m.role, content: m.content }));
+  // Solo enviar los últimos MAX_HISTORY mensajes a Claude para controlar tokens
+  const cm: Anthropic.MessageParam[] = msgs.slice(-MAX_HISTORY).map(m => ({ role: m.role, content: m.content }));
   if (senderName && !conv.draft?.clientName) cm[cm.length-1] = { role: 'user', content: `[Nombre: ${senderName}]\n\n${text}` };
   try {
     let r = await anthropic.messages.create({ model: MODEL, max_tokens: MAX_TOKENS, system: buildPrompt(ctx, phone), tools: TOOLS, messages: cm });
